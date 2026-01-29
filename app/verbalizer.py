@@ -40,6 +40,20 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]]) -> st
     if not rows:
         return f"I couldn’t find any data matching: {question}"
 
+    expected = getattr(plan, "expected_result", None)
+
+    # ----------------------------
+    # Scalar mode (single value)
+    # ----------------------------
+    if expected == "scalar":
+        r0 = rows[0]
+        if "value" in r0:
+            return f"The answer is {_fmt_number(r0['value'])}."
+        # fallback to first column
+        if r0:
+            k = list(r0.keys())[0]
+            return f"The answer is {_fmt_number(r0[k])}."
+
     comparison_dates = getattr(plan, "comparison_dates", None)
 
     # ----------------------------
@@ -157,9 +171,17 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]]) -> st
         )
 
     # ----------------------------
+    # If single-row single-column, answer directly
+    # ----------------------------
+    if len(rows) == 1 and isinstance(rows[0], dict) and len(rows[0]) == 1:
+        key = list(rows[0].keys())[0]
+        val = rows[0][key]
+        return f"For {question}, the value is {_fmt_number(val)}."
+
+    # ----------------------------
     # Generic fallback
     # ----------------------------
     return (
-        f"I found {len(rows)} results for **{question}**.\n"
+        f"I found {len(rows)} results for {question}.\n"
         f"Sample:\n{rows[:5]}"
     )

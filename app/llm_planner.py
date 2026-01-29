@@ -1,263 +1,343 @@
-from datetime import date, timedelta
-from typing import Optional
+from __future__ import annotations
 
-from openai import OpenAI, OpenAIError
-from pydantic import ValidationError
-
-from app.query_plan import QueryPlan, Dimension
-from app.fallback_planner import fallback_plan
 import json
+import os
 import re
+from typing import Literal, Optional, Set, Any
 
-client = OpenAI()
+from openai import OpenAI
+from pydantic import BaseModel, ValidationError
+import sqlglot
+from sqlglot import expressions as exp
 
-
-# ----------------------------
-# Date helpers
-# ----------------------------
-
-def today_utc() -> date:
-    return date.today()
-
-
-def week_start(d: date) -> date:
-    # ISO week: Monday = 0
-    return d - timedelta(days=d.weekday())
+from app.schema_context import schema_prompt
+from app.sql_safety import validate_select_only, UnsafeSQL
 
 
-# ----------------------------
-# Main planner
-# ----------------------------
+class LLMQuery(BaseModel):
+    sql: str
+    expected_result: Optional[Literal["scalar", "time_series", "breakdown", "table"]] = "table"
+    notes: Optional[str] = None
 
-def question_to_plan(question: str) -> QueryPlan:
-    """
-    Converts a natural language question into a validated QueryPlan.
-    Deterministic rules override the LLM for all time logic.
-    """
 
+def _extract_tables(sql: str) -> Set[str]:
+    try:
+        tree = _parse_sql(sql)
+    except Exception:
+        return set()
+    tables = set()
+    for t in tree.find_all(exp.Table):
+        if t.name:
+            tables.add(t.name)
+    return tables
+
+
+_PARAM_RE = re.compile(r"%\([a-zA-Z_][a-zA-Z0-9_]*\)s")
+_PARAM_TOKEN = "__PARAM__TOKEN__"
+
+
+def _sanitize_params(sql: str) -> str:
+    return _PARAM_RE.sub(f"'{_PARAM_TOKEN}'", sql)
+
+
+def _restore_params(sql: str) -> str:
+    return sql.replace(f"'{_PARAM_TOKEN}'", "%(restaurant)s")
+
+
+def _parse_sql(sql: str) -> exp.Expression:
+    return sqlglot.parse_one(_sanitize_params(sql), read="postgres")
+
+
+def _strip_code_fence(text: str) -> str:
+    # Remove ```json / ```sql fences if present
+    if text.strip().startswith("```"):
+        lines = text.strip().splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```"):
+            # drop first and last fence line
+            return "\n".join(lines[1:-1]).strip()
+    return text.strip()
+
+
+def _extract_json_object(text: str) -> Optional[dict]:
+    text = _strip_code_fence(text)
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return data[0]
+    except Exception:
+        pass
+
+    # try to find the first {...} block
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        snippet = text[start : end + 1]
+        try:
+            data = json.loads(snippet)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            return None
+    return None
+
+
+def _extract_sql(text: str) -> Optional[str]:
+    text = _strip_code_fence(text)
+    # try to find a SELECT or WITH statement
+    m = re.search(r"(WITH\\s+.+?SELECT\\s+|SELECT\\s+)", text, flags=re.IGNORECASE | re.DOTALL)
+    if not m:
+        return None
+    sql = text[m.start():].strip()
+    return sql
+
+
+def _requires_sales_filter(sql: str) -> bool:
+    s = sql.lower()
+    return " sales " in f" {s} " or "sales." in s
+
+
+def _has_closed_filter(sql: str) -> bool:
+    s = sql.lower().replace('"', "")
+    return "sale_state" in s and "'closed'" in s
+
+
+def _has_restaurant_param(sql: str) -> bool:
+    return "%(restaurant)s" in sql
+
+
+def _split_and(expr: exp.Expression) -> list[exp.Expression]:
+    parts: list[exp.Expression] = []
+    if isinstance(expr, exp.And):
+        parts.extend(_split_and(expr.left))
+        parts.extend(_split_and(expr.right))
+    else:
+        parts.append(expr)
+    return parts
+
+
+def _mentions_column(expr: exp.Expression, table: str, column: str) -> bool:
+    for c in expr.find_all(exp.Column):
+        if c.name == column and (c.table == table or c.table is None and table is None):
+            return True
+    return False
+
+
+def _replace_column(tree: exp.Expression, table: str, old: str, new: str) -> exp.Expression:
+    for col in tree.find_all(exp.Column):
+        if col.name == old and col.table == table:
+            col.set("this", exp.Identifier(this=new))
+    return tree
+
+
+def _apply_last_completed_week(sql: str, table: str, column: str) -> str:
+    try:
+        tree = _parse_sql(sql)
+    except Exception:
+        return sql
+
+    where = tree.args.get("where")
+    new_pred = exp.and_(
+        exp.GTE(
+            this=exp.Column(this=exp.Identifier(this=column), table=exp.Identifier(this=table)),
+            expression=exp.Sub(
+                this=exp.Anonymous(this="date_trunc", expressions=[exp.Literal.string("week"), exp.Anonymous(this="now")]),
+                expression=exp.Interval(this=exp.Literal.string("7 days")),
+            ),
+        ),
+        exp.LT(
+            this=exp.Column(this=exp.Identifier(this=column), table=exp.Identifier(this=table)),
+            expression=exp.Anonymous(this="date_trunc", expressions=[exp.Literal.string("week"), exp.Anonymous(this="now")]),
+        ),
+    )
+
+    if where is None:
+        tree.set("where", exp.Where(this=new_pred))
+        return _restore_params(tree.sql(dialect="postgres"))
+
+    parts = _split_and(where.this)
+    filtered = [
+        p for p in parts
+        if not _mentions_column(p, table, column)
+    ]
+    filtered.append(new_pred)
+    combined = filtered[0]
+    for p in filtered[1:]:
+        combined = exp.and_(combined, p)
+    tree.set("where", exp.Where(this=combined))
+    return _restore_params(tree.sql(dialect="postgres"))
+
+
+def question_to_sql(question: str, restaurant: str) -> LLMQuery:
+    client = OpenAI()
+    system_prompt = schema_prompt()
+    user_prompt = (
+        "Generate SQL to answer the user question.\n"
+        "Return JSON only. Use %(restaurant)s as the restaurant param.\n"
+        f"Question: {question}\n"
+    )
+
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.0,
+    )
+
+    content = resp.choices[0].message.content or ""
+
+    data = _extract_json_object(content)
+    if data is None:
+        sql = _extract_sql(content)
+        if not sql:
+            snippet = content.strip().replace("\n", " ")[:200]
+            raise ValueError(f"LLM response was not JSON or SQL. Snippet: {snippet}")
+        plan = LLMQuery(sql=sql, expected_result="table", notes="extracted_sql")
+    else:
+        # normalize common alternate key names
+        if "sql" not in data:
+            if "query" in data:
+                data["sql"] = data["query"]
+            elif "sql_query" in data:
+                data["sql"] = data["sql_query"]
+
+        # normalize expected_result if malformed
+        if "expected_result" in data:
+            if not isinstance(data["expected_result"], str):
+                data["expected_result"] = "table"
+            else:
+                allowed = {"scalar", "time_series", "breakdown", "table"}
+                if data["expected_result"] not in allowed:
+                    data["expected_result"] = "table"
+
+        try:
+            plan = LLMQuery(**data)
+        except ValidationError as e:
+            snippet = content.strip().replace("\n", " ")[:200]
+            raise ValueError(f"LLM JSON failed validation: {e}. Snippet: {snippet}") from e
+
+    # Basic SQL safety
+    validate_select_only(plan.sql)
+    if not _has_restaurant_param(plan.sql):
+        raise UnsafeSQL("SQL must include %(restaurant)s parameter for restaurant scoping.")
+    if _requires_sales_filter(plan.sql) and not _has_closed_filter(plan.sql):
+        raise UnsafeSQL("SQL must enforce sales.sale_state = 'CLOSED'.")
+
+    # Time window normalization for "last completed week" / "last week"
     q = question.lower()
-    today = today_utc()
-
-    # ----------------------------
-    # 1. Deterministic time handling
-    # ----------------------------
-
-    date_range: Optional[dict] = None
-    time_grain: str = "none"
-    limit: int = 0
-
-    # --- Last N days ---
-    if "last 7 days" in q:
-        date_range = {
-            "start": str(today - timedelta(days=7)),
-            "end": str(today),
-        }
-        time_grain = "day"
-        limit = 7
-
-    elif "last 14 days" in q:
-        date_range = {
-            "start": str(today - timedelta(days=14)),
-            "end": str(today),
-        }
-        time_grain = "day"
-        limit = 14
-
-    elif "last 30 days" in q:
-        date_range = {
-            "start": str(today - timedelta(days=30)),
-            "end": str(today),
-        }
-        time_grain = "day"
-        limit = 30
-
-    elif "yesterday" in q and "last week" in q:
-        yesterday = today - timedelta(days=1)
-        last_week_same_day = yesterday - timedelta(days=7)
-
-        return QueryPlan(
-            metric="gross_sales",
-            base_table="sales",
-            restaurant="Gamba",
-            date_range={"start": str(last_week_same_day), "end": str(yesterday)},
-            time_grain="day",
-            comparison_dates=[str(last_week_same_day), str(yesterday)],
-            dimensions=[],
-            limit=0,
-        )
-
-    # --- This week vs last week ---
-    elif "this week" in q and "last week" in q:
-        this_week_start = week_start(today)
-        last_week_start = this_week_start - timedelta(days=7)
-
-        date_range = {
-            "start": str(last_week_start),
-            "end": str(today),
-        }
-        time_grain = "week"
-        limit = 0  # weekly comparison, no limit
-
-    elif (
-        ("inc`reased" in q or "increase" in q or "grew" in q or "growth" in q)
-        and ("product" in q or "products" in q)
-        and ("last 2 weeks" in q or "last two weeks" in q)
-        and ("previous 2 weeks" in q or "previous two weeks" in q or "before that" in q)
-        and ("complete weeks" in q or "only complete weeks" in q)
-    ):
-        # deterministic "complete weeks" trend query
-        # Default top N
-        n = 5
-        m = re.search(r"\b(\d+)\b", q)
-        if m:
-            n = int(m.group(1))
-
-        return QueryPlan(
-            metric="item_revenue",
-            base_table="items",
-            restaurant="Gamba",
-            date_range=None,  # computed in SQL using date_trunc('week', now())
-            time_grain="none",
-            dimensions=[Dimension(table="products", column="name", alias="product")],
-            limit=n,
-            trend_complete_weeks=True,
-            trend_recent_weeks=2,
-            trend_prior_weeks=2,
-            trend_rank_by=("pct_change" if ("percent" in q or "%" in q or "rate" in q or "fastest" in q) else "delta"),
-        )
-
-    elif "this month" in q and "last month" in q:
-        first_this_month = today.replace(day=1)
-        first_last_month = (first_this_month - timedelta(days=1)).replace(day=1)
-
-        # If user explicitly asks "till same day number", do MTD vs prior MTD
-        if "same day number" in q or "till the same day" in q or "to the same day" in q:
-            # Example: today Jan 27 -> compare Jan 1-27 vs Dec 1-27
-            day_of_month = today.day
-            end_this = today
-            end_last = first_last_month + timedelta(days=day_of_month - 1)
-
-            return QueryPlan(
-                metric="gross_sales",
-                base_table="sales",
-                restaurant="Gamba",
-                date_range=None,  # we'll use explicit ranges below
-                time_grain="month",
-                comparison_dates=[str(first_last_month), str(first_this_month)],
-                comparison_ends=[str(end_last), str(end_this)],
-                dimensions=[],
-                limit=0,
+    if "last completed week" in q or "last complete week" in q or "last full week" in q or "last week" in q:
+        tables = _extract_tables(plan.sql)
+        if "sales" in tables:
+            plan = LLMQuery(
+                sql=_apply_last_completed_week(plan.sql, "sales", "created_at"),
+                expected_result=plan.expected_result,
+                notes=(plan.notes or "") + " | normalized:last_week",
+            )
+        elif "payments" in tables and "sales" not in tables:
+            plan = LLMQuery(
+                sql=_apply_last_completed_week(plan.sql, "payments", "created_at"),
+                expected_result=plan.expected_result,
+                notes=(plan.notes or "") + " | normalized:last_week",
             )
 
-        # Default: this month-to-date vs full last month (or keep your existing logic)
-        end_this = today
-        return QueryPlan(
-            metric="gross_sales",
-            base_table="sales",
-            restaurant="Gamba",
-            date_range={"start": str(first_last_month), "end": str(end_this)},
-            time_grain="month",
-            comparison_dates=[str(first_last_month), str(first_this_month)],
-            dimensions=[],
-            limit=0,
-        )
-
-    # ----------------------------
-    # 2. Metric & base table
-    # ----------------------------
-
-    # Default assumptions
-    metric = "gross_sales"
-    base_table = "sales"
-
-    if "revenue" in q or "sales" in q:
-        metric = "gross_sales"
-        base_table = "sales"
-
-    # ----------------------------
-    # 3. Dimensions
-    # ----------------------------
-
-    dimensions = []
-
-    # If user asks for "top/best products by revenue", force items-based revenue
-    if ("top" in q or "best" in q) and ("product" in q or "products" in q) and ("revenue" in q or "sales" in q):
-        # Default window if not specified
-        start = today - timedelta(days=30)
-        end = today
-
-        # Try to parse "top N"
-        n = 5
-        m = re.search(r"\btop\s+(\d+)\b", q)
-        if m:
-            n = int(m.group(1))
-
-        return QueryPlan(
-            metric="item_revenue",
-            base_table="items",
-            restaurant="Gamba",
-            date_range={"start": str(start), "end": str(end)},
-            time_grain="none",
-            dimensions=[Dimension(table="products", column="name", alias="product")],
-            limit=n,
-        )
-
-    # ----------------------------
-    # 4. If deterministic path worked, build plan directly
-    # ----------------------------
-
-    if date_range is not None:
-        return QueryPlan(
-            metric=metric,
-            base_table=base_table,
-            restaurant="Gamba",  # canonical name; SQL normalizes case
-            date_range=date_range,
-            time_grain=time_grain,
-            dimensions=dimensions,
-            limit=limit,
-        )
-
-    # ----------------------------
-    # 5. Otherwise use LLM planner
-    # ----------------------------
-
+    # Never use closed_at; replace with created_at when sales table is present
     try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            temperature=0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a BI query planner for a restaurant analytics system.\n"
-                        "Return ONLY valid JSON matching the QueryPlan schema.\n"
-                        "Do NOT invent dates like 'this week' or 'last week'.\n"
-                        "Dates must be explicit ISO dates.\n"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": question,
-                },
-            ],
+        tree = _parse_sql(plan.sql)
+        tree = _replace_column(tree, "sales", "closed_at", "created_at")
+        plan = LLMQuery(
+            sql=_restore_params(tree.sql(dialect="postgres")),
+            expected_result=plan.expected_result,
+            notes=(plan.notes or "") + " | normalized:created_at",
         )
+    except Exception:
+        pass
 
-        data = resp.choices[0].message.content
+    # If query filters on products.name, ensure item revenue (items.price * items.quantity)
+    try:
+        tree = _parse_sql(plan.sql)
+        has_product_name = any(
+            isinstance(expr, exp.EQ)
+            and _mentions_column(expr, "products", "name")
+            for expr in tree.find_all(exp.EQ)
+        )
+        if has_product_name:
+            # replace SUM(sales.total) with SUM(items.price * items.quantity)
+            for s in tree.find_all(exp.Select):
+                for i, sel in enumerate(s.expressions):
+                    if isinstance(sel, exp.Alias):
+                        target = sel.this
+                        if isinstance(target, exp.Sum) and _mentions_column(target, "sales", "total"):
+                            new_expr = exp.Sum(
+                                this=exp.Mul(
+                                    this=exp.Column(this=exp.Identifier(this="price"), table=exp.Identifier(this="items")),
+                                    expression=exp.Column(this=exp.Identifier(this="quantity"), table=exp.Identifier(this="items")),
+                                )
+                            )
+                            s.expressions[i] = exp.Alias(this=new_expr, alias=sel.alias)
+                    elif isinstance(sel, exp.Sum) and _mentions_column(sel, "sales", "total"):
+                        s.expressions[i] = exp.Sum(
+                            this=exp.Mul(
+                                this=exp.Column(this=exp.Identifier(this="price"), table=exp.Identifier(this="items")),
+                                expression=exp.Column(this=exp.Identifier(this="quantity"), table=exp.Identifier(this="items")),
+                            )
+                        )
 
-        obj = json.loads(data)
+            # ensure items.canceled IS NOT TRUE
+            where = tree.args.get("where")
+            canceled_pred = exp.IsNot(
+                this=exp.Column(this=exp.Identifier(this="canceled"), table=exp.Identifier(this="items")),
+                expression=exp.Boolean(this=True),
+            )
+            if where is None:
+                tree.set("where", exp.Where(this=canceled_pred))
+            else:
+                parts = _split_and(where.this)
+                if not any(_mentions_column(p, "items", "canceled") for p in parts):
+                    parts.append(canceled_pred)
+                    combined = parts[0]
+                    for p in parts[1:]:
+                        combined = exp.and_(combined, p)
+                    tree.set("where", exp.Where(this=combined))
 
-        # Some models wrap the payload
-        if isinstance(obj, dict) and "queryPlan" in obj and isinstance(obj["queryPlan"], dict):
-            obj = obj["queryPlan"]
+            # make product name match case-insensitive if using equality
+            for eq in tree.find_all(exp.EQ):
+                if _mentions_column(eq, "products", "name"):
+                    right = eq.expression
+                    left = eq.this
+                    eq.replace(
+                        exp.ILike(
+                            this=left,
+                            expression=right,
+                        )
+                    )
 
-        # Force restaurant (don’t trust the LLM)
-        obj["restaurant"] = "Gamba"
+            # coalesce sum to 0 for product revenue
+            for s in tree.find_all(exp.Select):
+                for i, sel in enumerate(s.expressions):
+                    if isinstance(sel, exp.Alias):
+                        target = sel.this
+                        if isinstance(target, exp.Sum):
+                            s.expressions[i] = exp.Alias(
+                                this=exp.Coalesce(this=target, expressions=[exp.Literal.number(0)]),
+                                alias=sel.alias,
+                            )
+                    elif isinstance(sel, exp.Sum):
+                        s.expressions[i] = exp.Coalesce(this=sel, expressions=[exp.Literal.number(0)])
 
-        plan = QueryPlan.model_validate(obj)
-        return plan
+            plan = LLMQuery(
+                sql=_restore_params(tree.sql(dialect="postgres")),
+                expected_result=plan.expected_result,
+                notes=(plan.notes or "") + " | normalized:product_revenue",
+            )
+    except Exception:
+        pass
 
-    except (OpenAIError, ValidationError, ValueError) as e:
-        # ----------------------------
-        # 6. Hard fallback (guaranteed)
-        # ----------------------------
-        return fallback_plan(question, restaurant="Gamba")
+    return LLMQuery(
+        sql=plan.sql.strip(),
+        expected_result=plan.expected_result,
+        notes=plan.notes,
+    )

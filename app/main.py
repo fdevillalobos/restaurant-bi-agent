@@ -12,8 +12,7 @@ from app.sql_builder import build_sql
 from app.db import run_select, DatabaseError
 from app.sql_safety import UnsafeSQL
 from app.introspect import introspect_tables
-from app.llm_planner import question_to_plan
-from app.fallback_planner import fallback_plan
+from app.llm_planner import question_to_sql
 from app.verbalizer import verbalize_answer
 
 
@@ -32,6 +31,9 @@ class AskRequest(BaseModel):
 def _pretty_sql(sql: str) -> str:
     return "\n".join(line.rstrip() for line in sql.strip().splitlines())
 
+def _default_restaurant() -> str:
+    return os.getenv("DEFAULT_RESTAURANT", "Gamba")
+
 @app.get("/restaurants")
 def restaurants():
     rows = run_select(
@@ -47,13 +49,14 @@ def ask(
     include_data: bool = False,
     include_sql: bool = False,
     preview: bool = True,
+    restaurant: str | None = None,
 ):
-    plan = question_to_plan(question)
-    built = build_sql(plan)
+    restaurant = restaurant or _default_restaurant()
+    plan = question_to_sql(question, restaurant=restaurant)
     try:
         rows = run_select(
-        built.sql,
-        params=built.params,
+        plan.sql,
+        params={"restaurant": restaurant},
         preview=preview,
         statement_timeout_ms=int(os.getenv("STATEMENT_TIMEOUT_MS_ASK", "30000")),
         )
@@ -61,8 +64,8 @@ def ask(
         # Always return SQL/params if requested, even on DB failures (timeouts, etc.)
         detail = {"db_error": str(e)}
         if include_sql:
-            detail["sql"] = built.sql
-            detail["params"] = built.params
+            detail["sql"] = plan.sql
+            detail["params"] = {"restaurant": restaurant}
             detail["plan"] = plan.model_dump()
         raise HTTPException(status_code=500, detail=detail)
 
@@ -74,8 +77,8 @@ def ask(
         resp["data"] = rows
 
     if include_sql:
-        resp["sql"] = built.sql
-        resp["params"] = built.params
+        resp["sql"] = plan.sql
+        resp["params"] = {"restaurant": restaurant}
         resp["plan"] = plan.model_dump()
 
     return resp

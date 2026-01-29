@@ -1,0 +1,450 @@
+{
+  "tables": {
+    "sales": {
+      "description": "Sales Table",
+      "columns": [
+        {
+          "name": "uuid",
+          "type": "varchar",
+          "restrictions": "Primary key",
+          "description": "Unique primary key in the form of AB-XXXX being AB the abbreviation of the restaurant name and XXXX the sales number"
+        },
+        {
+          "name": "restaurant",
+          "type": "varchar",
+          "restrictions": "Not Null",
+          "description": "Name of the restaurant"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "restrictions": "Not Null",
+          "description": "Sales number. Internal code. Unique for each restaurant but repeats in different restaurants"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "restrictions": null,
+          "description": "timestamp of created at for the sale, in Argentina time zone"
+        },
+        {
+          "name": "closed_at",
+          "type": "timestamp",
+          "restrictions": null,
+          "description": "timestamp of closed at for the sale, in Argentina time zone"
+        },
+        {
+          "name": "sale_type",
+          "type": "varchar",
+          "restrictions": null,
+          "description": "Type of sale. Values allowed: EAT-IN, TAKEAWAY, DELIVERY"
+        },
+        {
+          "name": "sale_state",
+          "type": "varchar",
+          "restrictions": null,
+          "description": "State of the sale. Values allowed: PENDING, CANCELED, CLOSED, IN-COURSE, PAYMENT-PROCESS, DELIVERY-SENT, READY-TO-DELIVER\nWe always restrict our queries to sale_state = 'CLOSED' unless specified specifically."
+        },
+        {
+          "name": "total",
+          "type": "float",
+          "restrictions": null,
+          "description": "Value of the whole sale in local currency"
+        },
+        {
+          "name": "comment",
+          "type": "varchar",
+          "restrictions": null,
+          "description": "Waiter commentary on the sale"
+        },
+        {
+          "name": "num_customers",
+          "type": "int",
+          "restrictions": null,
+          "description": "Number of customers for the sale. Only present in EAT-IN sale_types"
+        },
+        {
+          "name": "discount_id",
+          "type": "varchar",
+          "restrictions": "Foreign key (discounts)",
+          "description": "Links sales table with discounts table"
+        },
+        {
+          "name": "table_id",
+          "type": "varchar",
+          "restrictions": "Foreign key (tables)",
+          "description": "Links sales table with tables table"
+        },
+        {
+          "name": "waiter_id",
+          "type": "varchar",
+          "restrictions": "Foreign key (waiters)",
+          "description": "Links sales table with waiters table"
+        },
+        {
+          "name": "tip_id",
+          "type": "varchar",
+          "restrictions": "Foreign key (tips)",
+          "description": "Links sales table with tips table"
+        },
+        {
+          "name": "customer_id",
+          "type": "varchar",
+          "restrictions": "Foreign key (customers)",
+          "description": "Links sales table with customers table"
+        }
+      ]
+    },
+    "product_categories": {
+      "description": "Product Categories Table",
+      "columns": [
+        {
+          "name": "uuid",
+          "type": "varchar",
+          "restrictions": "Primary_key, unique",
+          "description": "Unique primary key in the form of AB-XXXX being AB the abbreviation of the restaurant name and XXXX the product category id"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "restrictions": "Not null",
+          "description": "Product category id. Internal id"
+        },
+        {
+          "name": "restaurant",
+          "type": "varchar",
+          "restrictions": "Not null",
+          "description": "Restaurant name"
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "restrictions": null,
+          "description": "Name of the category, input by restaurant owner"
+        },
+        {
+          "name": "position",
+          "type": "int",
+          "restrictions": null,
+          "description": "Do not use"
+        },
+        {
+          "name": "parent_category_id",
+          "type": "varchar",
+          "restrictions": "Foreign_key product categories uuid",
+          "description": "Links product_category table with itself. This is the way subcategories are created"
+        }
+      ]
+    },
+    "products": {
+      "description": "Products Table",
+      "columns": [
+        {
+          "name": "uuid",
+          "type": "varchar",
+          "restrictions": "Not Null, Primary Key, Unique",
+          "description": "Unique primary key in the form of AB-XXXX being AB the abbreviation of the restaurant name and XXXX the product id"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "restrictions": "Not Null",
+          "description": "Product id for this restaurant"
+        },
+        {
+          "name": "restaurant",
+          "type": "varchar",
+          "restrictions": "Not Null",
+          "description": "Restaurant name"
+        },
+        {
+          "name": "active",
+          "type": "bool",
+          "restrictions": null,
+          "description": "Is product currently active for sale?"
+        },
+        {
+          "name": "code",
+          "type": "varchar",
+          "restrictions": null,
+          "description": "Internal product code (de not use)"
+        },
+        {
+          "name": "description",
+          "type": "varchar",
+          "restrictions": null,
+          "description": "Product description"
+        },
+        {
+          "name": "online_menu",
+          "type": "bool",
+          "restrictions": null,
+          "description": "Does it appear on the online order menu?"
+        },
+        {
+          "name": "qr_menu",
+          "type": "bool",
+          "restrictions": null,
+          "description": "Does it appear on the QR menu?"
+        },
+        {
+          "name": "favorite",
+          "type": "bool",
+          "restrictions": null,
+          "description": "Is it a favorite product?"
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "restrictions": null,
+          "description": "Name of the product"
+        },
+        {
+          "name": "price",
+          "type": "float",
+          "restrictions": null,
+          "description": "Price of the product in local currency"
+        },
+        {
+          "name": "sell_alone",
+          "type": "bool",
+          "restrictions": null,
+          "description": "Can it be sold be itself or is it part of a bigger dish?"
+        },
+        {
+          "name": "position",
+          "type": "int",
+          "restrictions": null,
+          "description": "DO NOT USE"
+        },
+        {
+          "name": "stock",
+          "type": "float",
+          "restrictions": null,
+          "description": "Remaining stock of the product"
+        },
+        {
+          "name": "stock_control",
+          "type": "bool",
+          "restrictions": null,
+          "description": "Indicates whether we follow stock of this product or not"
+        },
+        {
+          "name": "category_id",
+          "type": "varchar",
+          "restrictions": "Foreign Key, product_categories",
+          "description": "Links products table with product_categories table"
+        }
+      ]
+    },
+    "payment_methods": {
+      "description": "Payments Method Table",
+      "columns": [
+        {
+          "name": "uuid",
+          "type": "varchar",
+          "restrictions": "Not Null, Primary Key, Unique",
+          "description": "Unique primary key in the form of AB-XXXX being AB the abbreviation of the restaurant name and XXXX the payment method id"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "restrictions": "Not Null",
+          "description": "Payment method id for this restaurant"
+        },
+        {
+          "name": "restaurant",
+          "type": "varchar",
+          "restrictions": "Not Null",
+          "description": "Restaurant name"
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "restrictions": null,
+          "description": "Name of the payment method (example: credit card, cash, debit card, QR, etc)"
+        },
+        {
+          "name": "active",
+          "type": "bool",
+          "restrictions": null,
+          "description": "Indicates whether the payment method is active to charge client"
+        },
+        {
+          "name": "code",
+          "type": "varchar",
+          "restrictions": null,
+          "description": "Internal payment method code"
+        }
+      ]
+    },
+    "payments": {
+      "description": "Payments Table",
+      "columns": [
+        {
+          "name": "uuid",
+          "type": "varchar",
+          "restrictions": "Not Null, PK, Unique",
+          "description": "Unique primary key in the form of AB-XXXX being AB the abbreviation of the restaurant name and XXXX the payment id"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "restrictions": "Not Null",
+          "description": "Payment id for this restaurant"
+        },
+        {
+          "name": "restaurant",
+          "type": "varchar",
+          "restrictions": "Not Null",
+          "description": "Restaurant name"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "restrictions": null,
+          "description": "timestamp for the moment the payment was created"
+        },
+        {
+          "name": "amount",
+          "type": "float",
+          "restrictions": null,
+          "description": "Amount in local currency for the payment"
+        },
+        {
+          "name": "canceled",
+          "type": "bool",
+          "restrictions": null,
+          "description": "Indicates if the payment was canceled or not"
+        },
+        {
+          "name": "pay_method_id",
+          "type": "varchar",
+          "restrictions": "FK: payment_methods",
+          "description": "Links payments table with payment_methods table."
+        },
+        {
+          "name": "sale_id",
+          "type": "varchar",
+          "restrictions": "FK: sales",
+          "description": "Links payments table with sales table. One to many relation. There can be many payments associated with one sale"
+        }
+      ]
+    },
+    "items": {
+      "description": "Items table",
+      "columns": [
+        {
+          "name": "uuid",
+          "type": "varchar",
+          "restrictions": "Not Null, Primary Key, Unique",
+          "description": "Unique primary key in the form of AB-XXXX being AB the abbreviation of the restaurant name and XXXX the item id"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "restrictions": "Not Null",
+          "description": "item id for this restaurant"
+        },
+        {
+          "name": "restaurant",
+          "type": "varchar",
+          "restrictions": "Not Null",
+          "description": "Restaurant name"
+        },
+        {
+          "name": "canceled",
+          "type": "bool",
+          "restrictions": null,
+          "description": "Indicates whether the item addition to the sale was canceled or not"
+        },
+        {
+          "name": "cancel_comment",
+          "type": "varchar",
+          "restrictions": null,
+          "description": "Comment from the waiter in the cancelation"
+        },
+        {
+          "name": "comment",
+          "type": "varchar",
+          "restrictions": null,
+          "description": "Comment from the waiter on the item (please no olives)"
+        },
+        {
+          "name": "price",
+          "type": "float",
+          "restrictions": null,
+          "description": "Price of the addition in local currency. Total price for this addition in the sale is price * quantity"
+        },
+        {
+          "name": "quantity",
+          "type": "int",
+          "restrictions": null,
+          "description": "Quantity of the product in this line item"
+        },
+        {
+          "name": "product_id",
+          "type": "varchar",
+          "restrictions": "FK: products",
+          "description": "Links items table with products table."
+        },
+        {
+          "name": "sale_id",
+          "type": "varchar",
+          "restrictions": "FK: sales",
+          "description": "Links items table with sales table."
+        }
+      ]
+    },
+    "discounts": {
+      "description": "Discounts table",
+      "columns": [
+        {
+          "name": "uuid",
+          "type": "varchar",
+          "restrictions": "Not Null, Primary Key, Unique",
+          "description": "Unique primary key in the form of AB-XXXX being AB the abbreviation of the restaurant name and XXXX the discount id"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "restrictions": "Not Null",
+          "description": "discount id for this restaurant"
+        },
+        {
+          "name": "restaurant",
+          "type": "varchar",
+          "restrictions": "Not Null",
+          "description": "Restaurant name"
+        },
+        {
+          "name": "amount",
+          "type": "float",
+          "restrictions": null,
+          "description": "Amount of the discount in local currency"
+        },
+        {
+          "name": "canceled",
+          "type": "bool",
+          "restrictions": null,
+          "description": "Indicates whether the discount was canceled or not"
+        },
+        {
+          "name": "percentage",
+          "type": "int",
+          "restrictions": null,
+          "description": "If discount was a percentage of the total bill, this is where that goes"
+        },
+        {
+          "name": "sale_id",
+          "type": "varchar",
+          "restrictions": "FK: sales",
+          "description": "Links discounts table with sales table."
+        }
+      ]
+    }
+  },
+  "meta": {
+    "source": "fudo_schema.xlsx"
+  }
+}
