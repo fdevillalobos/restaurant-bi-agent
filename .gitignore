@@ -4,3 +4,4 @@
 __pycache__/
 *.pyc
 fudo_schema.xlsx
+control.db
