@@ -78,10 +78,16 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 chat_id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 selected_restaurants TEXT,
+                language TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
             """
         )
+        # lightweight migration for existing DBs
+        cur.execute("PRAGMA table_info(sessions)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "language" not in cols:
+            cur.execute("ALTER TABLE sessions ADD COLUMN language TEXT;")
         conn.commit()
 
 
@@ -241,6 +247,13 @@ def set_session(chat_id: int, user_id: int, selected_restaurants: Optional[str],
         conn.commit()
 
 
+def set_session_language(chat_id: int, language: str, db_path: str = DEFAULT_DB_PATH) -> None:
+    with _connect(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE sessions SET language = ? WHERE chat_id = ?", (language, chat_id))
+        conn.commit()
+
+
 def clear_session(chat_id: int, db_path: str = DEFAULT_DB_PATH) -> None:
     with _connect(db_path) as conn:
         cur = conn.cursor()
@@ -267,4 +280,3 @@ def get_restaurant_ids_by_names(dsn_id: int, names: List[str], db_path: str = DE
             [dsn_id] + names,
         )
         return [r["id"] for r in cur.fetchall()]
-

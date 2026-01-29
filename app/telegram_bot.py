@@ -32,6 +32,7 @@ from app.tenant_store import (
     get_dsn_by_id,
     create_user,
     set_user_restaurants,
+    set_session_language,
 )
 from app.verbalizer import verbalize_answer
 
@@ -62,6 +63,14 @@ def _selected_restaurants(chat_id: int) -> List[str]:
         return []
     raw = sess.get("selected_restaurants") or ""
     return [r.strip() for r in raw.split(",") if r.strip()]
+
+
+def _session_language(chat_id: int) -> str:
+    sess = get_session(chat_id)
+    if not sess:
+        return "en"
+    lang = sess.get("language") or "en"
+    return "es" if lang == "es" else "en"
 
 
 def _set_selected_restaurants(chat_id: int, user_id: int, restaurants: List[str]) -> None:
@@ -111,7 +120,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Session invalid. Please /login again.")
         return
 
-    base_cmds = ["/restaurants", "/whoami", "/logout", "/menu", "/help"]
+    base_cmds = ["/restaurants", "/language", "/whoami", "/logout", "/menu", "/help"]
     admin_cmds = []
     if user.role == "superuser":
         admin_cmds.extend(["/add_dsn", "/add_user"])
@@ -142,9 +151,29 @@ async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Email: {user.email}\n"
         f"Role: {user.role}\n"
         f"DSN: {dsn['name'] if dsn else 'none'}\n"
-        f"Selected restaurants: {', '.join(selected) if selected else 'none'}"
+        f"Selected restaurants: {', '.join(selected) if selected else 'none'}\n"
+        f"Language: {_session_language(chat_id)}"
     )
     await update.message.reply_text(msg)
+
+
+async def language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    user_id = _session_user(chat_id)
+    if not user_id:
+        await update.message.reply_text("Please /login first.")
+        return
+    text = (update.message.text or "").strip().lower()
+    parts = text.split()
+    if len(parts) == 1:
+        await update.message.reply_text("Usage: /language en OR /language es")
+        return
+    lang = parts[1]
+    if lang not in ("en", "es"):
+        await update.message.reply_text("Invalid language. Use /language en or /language es.")
+        return
+    set_session_language(chat_id, lang)
+    await update.message.reply_text(f"Language set to {lang}.")
 
 
 async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -420,7 +449,8 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         dsn=dsn["dsn"],
     )
 
-    answer = verbalize_answer(question, plan, rows)
+    language = _session_language(chat_id)
+    answer = verbalize_answer(question, plan, rows, language=language)
     await update.message.reply_text(answer)
 
 
@@ -433,6 +463,7 @@ def build_app():
             ("login", "Log in"),
             ("logout", "Log out"),
             ("restaurants", "Select restaurant(s)"),
+            ("language", "Set language (en/es)"),
             ("menu", "Show available commands"),
             ("help", "Show available commands"),
             ("whoami", "Show current session info"),
@@ -450,6 +481,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("whoami", whoami))
+    app.add_handler(CommandHandler("language", language))
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CommandHandler("logout", logout))
 

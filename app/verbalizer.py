@@ -36,8 +36,10 @@ def _find_dimension_key(rows: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
-def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]]) -> str:
+def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]], language: str = "en") -> str:
     if not rows:
+        if language == "es":
+            return f"No pude encontrar datos para: {question}"
         return f"I couldn’t find any data matching: {question}"
 
     expected = getattr(plan, "expected_result", None)
@@ -48,10 +50,14 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]]) -> st
     if expected == "scalar":
         r0 = rows[0]
         if "value" in r0:
+            if language == "es":
+                return f"La respuesta es {_fmt_number(r0['value'])}."
             return f"The answer is {_fmt_number(r0['value'])}."
         # fallback to first column
         if r0:
             k = list(r0.keys())[0]
+            if language == "es":
+                return f"La respuesta es {_fmt_number(r0[k])}."
             return f"The answer is {_fmt_number(r0[k])}."
 
     comparison_dates = getattr(plan, "comparison_dates", None)
@@ -85,7 +91,7 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]]) -> st
             # If still missing, just show what we have
             lines = [f"• {_to_date_str(r['period'])}: {_fmt_number(r['value'])}" for r in rows]
             return (
-                f"Here’s what I found for **{question}**:\n\n"
+                (f"Aquí está lo que encontré para **{question}**:\n\n" if language == "es" else f"Here’s what I found for **{question}**:\n\n")
                 + "\n".join(lines)
             )
 
@@ -93,6 +99,7 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]]) -> st
         pct = (diff / v1) * 100 if v1 != 0 else 0.0
         sign = "+" if pct >= 0 else ""
         direction = "increase" if diff > 0 else "decrease" if diff < 0 else "no change"
+        direction_es = "aumento" if diff > 0 else "disminución" if diff < 0 else "sin cambios"
 
         label_new = "Current period"
         label_old = "Previous period"
@@ -109,6 +116,13 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]]) -> st
             label_new = "This month"
             label_old = "Last month"
 
+        if language == "es":
+            return (
+                f"Para **{question}**:\n"
+                f"- {label_new} ({d2}): {_fmt_number(v2)}\n"
+                f"- {label_old} ({d1}): {_fmt_number(v1)}\n"
+                f"Cambio: {_fmt_number(diff)} ({sign}{pct:.1f}%) {direction_es}"
+            )
         return (
             f"For **{question}**:\n"
             f"- {label_new} ({d2}): {_fmt_number(v2)}\n"
@@ -127,9 +141,9 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]]) -> st
             lines.append(f"• {day}: {val}")
 
         return (
-            f"Here’s what I found for **{question}**:\n\n"
+            (f"Aquí está lo que encontré para **{question}**:\n\n" if language == "es" else f"Here’s what I found for **{question}**:\n\n")
             + "\n".join(lines)
-            + "\n\nLet me know if you want to explore this further."
+            + ("\n\nAvísame si quieres profundizar más." if language == "es" else "\n\nLet me know if you want to explore this further.")
         )
 
     # ----------------------------
@@ -151,9 +165,9 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]]) -> st
             lines.append(f"• {product}: Δ {delta} ({pct_str}) — recent {recent}, prior {prior}")
 
         return (
-            f"Here are the products with the biggest increase for **{question}**:\n\n"
+            (f"Aquí están los productos con mayor aumento para **{question}**:\n\n" if language == "es" else f"Here are the products with the biggest increase for **{question}**:\n\n")
             + "\n".join(lines)
-            + "\n\nWant me to rank by % change instead of absolute increase?"
+            + ("\n\n¿Quieres que los ordene por % de cambio en vez de aumento absoluto?" if language == "es" else "\n\nWant me to rank by % change instead of absolute increase?")
         )
 
     # Standard ranking: label + value
@@ -165,9 +179,9 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]]) -> st
             lines.append(f"• {label}: {val}")
 
         return (
-            f"Here’s the breakdown for **{question}**:\n\n"
+            (f"Aquí está el desglose para **{question}**:\n\n" if language == "es" else f"Here’s the breakdown for **{question}**:\n\n")
             + "\n".join(lines)
-            + "\n\nWant me to add a date filter or compare periods?"
+            + ("\n\n¿Quieres que agregue un filtro de fechas o compare períodos?" if language == "es" else "\n\nWant me to add a date filter or compare periods?")
         )
 
     # ----------------------------
@@ -176,12 +190,14 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]]) -> st
     if len(rows) == 1 and isinstance(rows[0], dict) and len(rows[0]) == 1:
         key = list(rows[0].keys())[0]
         val = rows[0][key]
+        if language == "es":
+            return f"Para {question}, el valor es {_fmt_number(val)}."
         return f"For {question}, the value is {_fmt_number(val)}."
 
     # ----------------------------
     # Generic fallback
     # ----------------------------
     return (
-        f"I found {len(rows)} results for {question}.\n"
-        f"Sample:\n{rows[:5]}"
+        (f"Encontré {len(rows)} resultados para {question}.\n" if language == "es" else f"I found {len(rows)} results for {question}.\n")
+        + f"Sample:\n{rows[:5]}"
     )
