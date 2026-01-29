@@ -33,6 +33,7 @@ from app.tenant_store import (
     create_user,
     set_user_restaurants,
     set_session_language,
+    set_session_include_sql,
 )
 from app.verbalizer import verbalize_answer
 
@@ -71,6 +72,14 @@ def _session_language(chat_id: int) -> str:
         return "en"
     lang = sess.get("language") or "en"
     return "es" if lang == "es" else "en"
+
+
+def _session_include_sql(chat_id: int) -> bool:
+    sess = get_session(chat_id)
+    if not sess:
+        return False
+    val = sess.get("include_sql")
+    return bool(val) if val is not None else False
 
 
 def _set_selected_restaurants(chat_id: int, user_id: int, restaurants: List[str]) -> None:
@@ -120,7 +129,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Session invalid. Please /login again.")
         return
 
-    base_cmds = ["/restaurants", "/language", "/whoami", "/logout", "/menu", "/help"]
+    base_cmds = ["/restaurants", "/language", "/debug", "/whoami", "/logout", "/menu", "/help"]
     admin_cmds = []
     if user.role == "superuser":
         admin_cmds.extend(["/add_dsn", "/add_user"])
@@ -152,7 +161,8 @@ async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Role: {user.role}\n"
         f"DSN: {dsn['name'] if dsn else 'none'}\n"
         f"Selected restaurants: {', '.join(selected) if selected else 'none'}\n"
-        f"Language: {_session_language(chat_id)}"
+        f"Language: {_session_language(chat_id)}\n"
+        f"Include SQL: {'on' if _session_include_sql(chat_id) else 'off'}"
     )
     await update.message.reply_text(msg)
 
@@ -174,6 +184,25 @@ async def language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     set_session_language(chat_id, lang)
     await update.message.reply_text(f"Language set to {lang}.")
+
+
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    user_id = _session_user(chat_id)
+    if not user_id:
+        await update.message.reply_text("Please /login first.")
+        return
+    text = (update.message.text or "").strip().lower()
+    parts = text.split()
+    if len(parts) == 1:
+        await update.message.reply_text("Usage: /debug on OR /debug off")
+        return
+    flag = parts[1]
+    if flag not in ("on", "off"):
+        await update.message.reply_text("Invalid option. Use /debug on or /debug off.")
+        return
+    set_session_include_sql(chat_id, flag == "on")
+    await update.message.reply_text(f"Debug SQL is now {flag}.")
 
 
 async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -451,6 +480,8 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     language = _session_language(chat_id)
     answer = verbalize_answer(question, plan, rows, language=language)
+    if _session_include_sql(chat_id):
+        answer = f"{answer}\n\nSQL:\n{sql}"
     await update.message.reply_text(answer)
 
 
@@ -464,6 +495,7 @@ def build_app():
             ("logout", "Log out"),
             ("restaurants", "Select restaurant(s)"),
             ("language", "Set language (en/es)"),
+            ("debug", "Toggle SQL output (on/off)"),
             ("menu", "Show available commands"),
             ("help", "Show available commands"),
             ("whoami", "Show current session info"),
@@ -482,6 +514,7 @@ def main() -> None:
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("language", language))
+    app.add_handler(CommandHandler("debug", debug))
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CommandHandler("logout", logout))
 

@@ -79,6 +79,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 user_id INTEGER NOT NULL,
                 selected_restaurants TEXT,
                 language TEXT,
+                include_sql INTEGER,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
             """
@@ -88,6 +89,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cols = {row[1] for row in cur.fetchall()}
         if "language" not in cols:
             cur.execute("ALTER TABLE sessions ADD COLUMN language TEXT;")
+        if "include_sql" not in cols:
+            cur.execute("ALTER TABLE sessions ADD COLUMN include_sql INTEGER;")
         conn.commit()
 
 
@@ -251,6 +254,16 @@ def set_session_language(chat_id: int, language: str, db_path: str = DEFAULT_DB_
     with _connect(db_path) as conn:
         cur = conn.cursor()
         cur.execute("UPDATE sessions SET language = ? WHERE chat_id = ?", (language, chat_id))
+        conn.commit()
+
+
+def set_session_include_sql(chat_id: int, include_sql: bool, db_path: str = DEFAULT_DB_PATH) -> None:
+    with _connect(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE sessions SET include_sql = ? WHERE chat_id = ?",
+            (1 if include_sql else 0, chat_id),
+        )
         conn.commit()
 
 
