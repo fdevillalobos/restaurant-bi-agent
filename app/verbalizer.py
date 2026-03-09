@@ -36,6 +36,24 @@ def _find_dimension_key(rows: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+def _find_value_key(row: Dict[str, Any], exclude: set[str]) -> Optional[str]:
+    for k, v in row.items():
+        if k in exclude:
+            continue
+        if isinstance(v, (int, float)):
+            return k
+        try:
+            float(v)
+            return k
+        except Exception:
+            continue
+    # fallback: any remaining key
+    for k in row.keys():
+        if k not in exclude:
+            return k
+    return None
+
+
 def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]], language: str = "en") -> str:
     if not rows:
         if language == "es":
@@ -131,20 +149,33 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]], langu
         )
 
     # ----------------------------
-    # Time series mode
+    # Time series mode (supports period/value or week/gross_sales, etc.)
     # ----------------------------
-    if "period" in rows[0] and "value" in rows[0]:
+    if isinstance(rows[0], dict) and ("period" in rows[0] or "week" in rows[0]):
+        time_key = "period" if "period" in rows[0] else "week"
+        # choose value key
+        value_key = None
+        for k in rows[0].keys():
+            if k != time_key:
+                value_key = k
+                break
+        value_label = "value" if value_key is None else value_key
+
         lines = []
         for r in rows:
-            day = _to_date_str(r.get("period"))
-            val = _fmt_number(r.get("value"))
-            lines.append(f"• {day}: {val}")
+            day = _to_date_str(r.get(time_key))
+            val = _fmt_number(r.get(value_key)) if value_key else _fmt_number(r.get("value"))
+            if language == "es":
+                lines.append(f"- {day} -> {value_label} = {val}")
+            else:
+                lines.append(f"- {day} -> {value_label.replace('_',' ').title()} = {val}")
 
-        return (
-            (f"Aquí está lo que encontré para **{question}**:\n\n" if language == "es" else f"Here’s what I found for **{question}**:\n\n")
-            + "\n".join(lines)
-            + ("\n\nAvísame si quieres profundizar más." if language == "es" else "\n\nLet me know if you want to explore this further.")
-        )
+        if language == "es":
+            header = f"Resultados para {question}:\n"
+        else:
+            header = f"Results for {question}:\n"
+
+        return header + "\n".join(lines)
 
     # ----------------------------
     # Ranking / breakdown mode
@@ -170,19 +201,24 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]], langu
             + ("\n\n¿Quieres que los ordene por % de cambio en vez de aumento absoluto?" if language == "es" else "\n\nWant me to rank by % change instead of absolute increase?")
         )
 
-    # Standard ranking: label + value
-    if dim_key and "value" in rows[0]:
-        lines = []
-        for r in rows[:20]:
-            label = str(r.get(dim_key))
-            val = _fmt_number(r.get("value"))
-            lines.append(f"• {label}: {val}")
+    # Standard ranking: label + value (supports custom value key)
+    if dim_key:
+        value_key = "value" if "value" in rows[0] else _find_value_key(rows[0], {dim_key, "period"})
+        if value_key:
+            lines = []
+            label_name = value_key.replace("_", " ").title()
+            for r in rows[:20]:
+                label = str(r.get(dim_key))
+                val = _fmt_number(r.get(value_key))
+                if language == "es":
+                    lines.append(f"- {label} -> {label_name} = {val}")
+                else:
+                    lines.append(f"- {label} -> {label_name} = {val}")
 
-        return (
-            (f"Aquí está el desglose para **{question}**:\n\n" if language == "es" else f"Here’s the breakdown for **{question}**:\n\n")
-            + "\n".join(lines)
-            + ("\n\n¿Quieres que agregue un filtro de fechas o compare períodos?" if language == "es" else "\n\nWant me to add a date filter or compare periods?")
-        )
+            return (
+                (f"Aquí está el desglose para {question}:\n" if language == "es" else f"Here’s the breakdown for {question}:\n")
+                + "\n".join(lines)
+            )
 
     # ----------------------------
     # If single-row single-column, answer directly
@@ -197,7 +233,14 @@ def verbalize_answer(question: str, plan: Any, rows: List[Dict[str, Any]], langu
     # ----------------------------
     # Generic fallback
     # ----------------------------
+    if rows and isinstance(rows[0], dict):
+        lines = []
+        for r in rows[:20]:
+            parts = [f"{k}={_fmt_number(v)}" for k, v in r.items()]
+            lines.append("- " + ", ".join(parts))
+        header = (f"Encontré {len(rows)} resultados para {question}:\n" if language == "es" else f"I found {len(rows)} results for {question}:\n")
+        return header + "\n".join(lines)
+
     return (
-        (f"Encontré {len(rows)} resultados para {question}.\n" if language == "es" else f"I found {len(rows)} results for {question}.\n")
-        + f"Sample:\n{rows[:5]}"
+        (f"Encontré {len(rows)} resultados para {question}." if language == "es" else f"I found {len(rows)} results for {question}.")
     )

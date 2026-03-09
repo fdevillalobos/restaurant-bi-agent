@@ -15,7 +15,7 @@ from telegram.ext import (
 )
 
 from app.auth import hash_password, verify_password
-from app.db import run_select
+from app.db import run_select, DatabaseError
 from app.llm_planner import question_to_sql
 from app.tenant_store import (
     init_db,
@@ -446,6 +446,8 @@ async def add_user_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
+    if not update.message or not update.message.text:
+        return
     user_id = _session_user(chat_id)
     if not user_id:
         await update.message.reply_text("Please /login first.")
@@ -470,19 +472,27 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if "restaurant" not in params and "restaurants" not in params:
         params = {"restaurant": restaurants[0]}
 
-    rows = run_select(
-        sql,
-        params=params,
-        preview=True,
-        statement_timeout_ms=int(os.getenv("STATEMENT_TIMEOUT_MS_ASK", "30000")),
-        dsn=dsn["dsn"],
-    )
-
     language = _session_language(chat_id)
-    answer = verbalize_answer(question, plan, rows, language=language)
-    if _session_include_sql(chat_id):
-        answer = f"{answer}\n\nSQL:\n{sql}"
-    await update.message.reply_text(answer)
+    try:
+        rows = run_select(
+            sql,
+            params=params,
+            preview=True,
+            statement_timeout_ms=int(os.getenv("STATEMENT_TIMEOUT_MS_ASK", "30000")),
+            dsn=dsn["dsn"],
+        )
+
+        answer = verbalize_answer(question, plan, rows, language=language)
+        if _session_include_sql(chat_id):
+            answer = f"{answer}\n\nSQL:\n{sql}"
+        await update.message.reply_text(answer)
+    except DatabaseError as e:
+        msg = "Query failed. Please try again or contact support."
+        if language == "es":
+            msg = "La consulta falló. Intenta de nuevo o contacta soporte."
+        if _session_include_sql(chat_id):
+            msg = f"{msg}\n\nError:\n{e}\n\nSQL:\n{sql}"
+        await update.message.reply_text(msg)
 
 
 def build_app():

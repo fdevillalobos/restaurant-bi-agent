@@ -44,6 +44,11 @@ def _restore_params(sql: str) -> str:
     return sql.replace(f"'{_PARAM_TOKEN}'", "%(restaurant)s")
 
 
+def _escape_percent(sql: str) -> str:
+    # Escape bare % for psycopg pyformat (keep %(name)s intact)
+    return re.sub(r"%(?!\()", "%%", sql)
+
+
 def _parse_sql(sql: str) -> exp.Expression:
     return sqlglot.parse_one(_sanitize_params(sql), read="postgres")
 
@@ -169,6 +174,79 @@ def _apply_last_completed_week(sql: str, table: str, column: str) -> str:
     return _restore_params(tree.sql(dialect="postgres"))
 
 
+def _inject_items_not_canceled(sql: str) -> str:
+    # Insert "items.canceled IS NOT TRUE" into WHERE before GROUP/ORDER/LIMIT
+    if "items.canceled" in sql.lower():
+        return sql
+    lower = sql.lower()
+    insert = " items.canceled IS NOT TRUE "
+    if " where " in lower:
+        # insert AND before group/order/limit
+        for token in [" group by ", " order by ", " limit "]:
+            idx = lower.find(token)
+            if idx != -1:
+                return sql[:idx] + " AND" + insert + sql[idx:]
+        return sql.rstrip(";") + " AND" + insert + ";"
+    else:
+        # add WHERE before group/order/limit
+        for token in [" group by ", " order by ", " limit "]:
+            idx = lower.find(token)
+            if idx != -1:
+                return sql[:idx] + " WHERE" + insert + sql[idx:]
+    return sql.rstrip(";") + " WHERE" + insert + ";"
+
+
+def _apply_last_weekday(sql: str, table: str, column: str, weekday_index: int) -> str:
+    """
+    weekday_index: 0=Mon ... 6=Sun
+    Returns most recent weekday (including current week). If today is before that weekday,
+    shift to previous week.
+    """
+    # Use ISO week day (Mon=1..Sun=7). Last weekday = date_trunc('week') + (idx) days,
+    # minus 7 days if today's ISO DOW < target.
+    target_day = weekday_index + 1
+    pred_sql = (
+        f"DATE({table}.{column}) = ("
+        f"DATE_TRUNC('week', CURRENT_DATE) + INTERVAL '{weekday_index} days' - "
+        f"(CASE WHEN EXTRACT(ISODOW FROM CURRENT_DATE) < {target_day} "
+        f"THEN INTERVAL '7 days' ELSE INTERVAL '0 days' END)"
+        f")"
+    )
+
+    try:
+        tree = _parse_sql(sql)
+        where = tree.args.get("where")
+        parts = _split_and(where.this) if where else []
+        filtered = [p for p in parts if not _mentions_column(p, table, column)]
+        pred_tree = sqlglot.parse_one(f"SELECT * FROM t WHERE {pred_sql}", read="postgres")
+        pred_expr = pred_tree.args["where"].this
+        filtered.append(pred_expr)
+        combined = filtered[0] if filtered else pred_expr
+        for p in filtered[1:]:
+            combined = exp.and_(combined, p)
+        tree.set("where", exp.Where(this=combined))
+        return _restore_params(tree.sql(dialect="postgres"))
+    except Exception:
+        # fallback: inject predicate into SQL string
+        return _inject_where_pred(sql, pred_sql)
+
+
+def _inject_where_pred(sql: str, pred: str) -> str:
+    lower = sql.lower()
+    if " where " in lower:
+        for token in [" group by ", " order by ", " limit "]:
+            idx = lower.find(token)
+            if idx != -1:
+                return sql[:idx] + " AND " + pred + sql[idx:]
+        return sql.rstrip(";") + " AND " + pred + ";"
+    else:
+        for token in [" group by ", " order by ", " limit "]:
+            idx = lower.find(token)
+            if idx != -1:
+                return sql[:idx] + " WHERE " + pred + sql[idx:]
+        return sql.rstrip(";") + " WHERE " + pred + ";"
+
+
 def question_to_sql(question: str, restaurant: str) -> LLMQuery:
     client = OpenAI()
     system_prompt = schema_prompt()
@@ -229,7 +307,18 @@ def question_to_sql(question: str, restaurant: str) -> LLMQuery:
 
     # Time window normalization for "last completed week" / "last week"
     q = question.lower()
-    if "last completed week" in q or "last complete week" in q or "last full week" in q or "last week" in q:
+    last_week_phrases = (
+        "last completed week",
+        "last complete week",
+        "last full week",
+        "last week",
+        "semana pasada",
+        "semana anterior",
+        "última semana",
+        "ultima semana",
+        "semana previa",
+    )
+    if any(p in q for p in last_week_phrases):
         tables = _extract_tables(plan.sql)
         if "sales" in tables:
             plan = LLMQuery(
@@ -243,6 +332,42 @@ def question_to_sql(question: str, restaurant: str) -> LLMQuery:
                 expected_result=plan.expected_result,
                 notes=(plan.notes or "") + " | normalized:last_week",
             )
+
+    # Time window normalization for "last <weekday>"
+    weekday_map = {
+        "last monday": 0,
+        "last tuesday": 1,
+        "last wednesday": 2,
+        "last thursday": 3,
+        "last friday": 4,
+        "last saturday": 5,
+        "last sunday": 6,
+        "lunes pasado": 0,
+        "martes pasado": 1,
+        "miércoles pasado": 2,
+        "miercoles pasado": 2,
+        "jueves pasado": 3,
+        "viernes pasado": 4,
+        "sábado pasado": 5,
+        "sabado pasado": 5,
+        "domingo pasado": 6,
+    }
+    for phrase, idx in weekday_map.items():
+        if phrase in q:
+            tables = _extract_tables(plan.sql)
+            if "sales" in tables:
+                plan = LLMQuery(
+                    sql=_apply_last_weekday(plan.sql, "sales", "created_at", idx),
+                    expected_result=plan.expected_result,
+                    notes=(plan.notes or "") + " | normalized:last_weekday",
+                )
+            elif "payments" in tables and "sales" not in tables:
+                plan = LLMQuery(
+                    sql=_apply_last_weekday(plan.sql, "payments", "created_at", idx),
+                    expected_result=plan.expected_result,
+                    notes=(plan.notes or "") + " | normalized:last_weekday",
+                )
+            break
 
     # Never use closed_at; replace with created_at when sales table is present
     try:
@@ -336,8 +461,49 @@ def question_to_sql(question: str, restaurant: str) -> LLMQuery:
     except Exception:
         pass
 
+    # If items table is used, ensure canceled items are excluded
+    try:
+        sql_lower = plan.sql.lower()
+        if "items" in sql_lower and "items.canceled" not in sql_lower:
+            tree = _parse_sql(plan.sql)
+            where = tree.args.get("where")
+            canceled_pred = exp.IsNot(
+                this=exp.Column(this=exp.Identifier(this="canceled"), table=exp.Identifier(this="items")),
+                expression=exp.Boolean(this=True),
+            )
+            if where is None:
+                tree.set("where", exp.Where(this=canceled_pred))
+            else:
+                parts = _split_and(where.this)
+                if not any(_mentions_column(p, "items", "canceled") for p in parts):
+                    parts.append(canceled_pred)
+                    combined = parts[0]
+                    for p in parts[1:]:
+                        combined = exp.and_(combined, p)
+                    tree.set("where", exp.Where(this=combined))
+            plan = LLMQuery(
+                sql=_restore_params(tree.sql(dialect="postgres")),
+                expected_result=plan.expected_result,
+                notes=(plan.notes or "") + " | normalized:items_not_canceled",
+            )
+    except Exception:
+        # If parsing fails, fall back to safe string injection.
+        pass
+
+    # Final fallback for items.canceled if still missing
+    try:
+        if "items" in plan.sql.lower() and "items.canceled" not in plan.sql.lower():
+            plan = LLMQuery(
+                sql=_inject_items_not_canceled(plan.sql),
+                expected_result=plan.expected_result,
+                notes=(plan.notes or "") + " | normalized:items_not_canceled",
+            )
+    except Exception:
+        pass
+
+    final_sql = _escape_percent(plan.sql.strip())
     return LLMQuery(
-        sql=plan.sql.strip(),
+        sql=final_sql,
         expected_result=plan.expected_result,
         notes=plan.notes,
     )
