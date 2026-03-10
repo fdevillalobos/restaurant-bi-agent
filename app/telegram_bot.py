@@ -14,7 +14,7 @@ from telegram.ext import (
     filters,
 )
 
-from app.analyst import generate_answer
+from app.analyst import generate_answer, format_table
 from app.auth import hash_password, verify_password
 from app.charting import make_chart
 from app.db import run_select, DatabaseError
@@ -506,10 +506,22 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             dsn=dsn["dsn"],
         )
 
-        answer = generate_answer(question, rows, language=language, history=history)
+        table = format_table(rows)
+        insight = generate_answer(question, rows, language=language, history=history)
+
+        if table:
+            await update.message.reply_text(
+                f"<pre>{table}</pre>", parse_mode="HTML"
+            )
+
+        reply = insight
         if _session_include_sql(chat_id):
-            answer = f"{answer}\n\nSQL:\n```\n{sql}\n```"
-        await update.message.reply_text(answer)
+            reply = f"{reply}\n\nSQL:\n<pre>{sql}</pre>"
+            await update.message.reply_text(reply, parse_mode="HTML")
+        else:
+            await update.message.reply_text(reply)
+
+        answer = f"{table}\n\n{insight}" if table else insight
 
         # Send chart if the data warrants one
         chart_bytes = make_chart(rows, question)

@@ -7,7 +7,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from app.analyst import generate_answer
+from app.analyst import generate_answer, format_table
 from app.charting import make_chart
 from app.db import run_select, DatabaseError
 from app.llm_planner import question_to_sql
@@ -51,7 +51,9 @@ def _ask(
             print(f"SQL was:\n{plan.sql}")
         return None, []
 
-    answer = generate_answer(question, rows, language=language, history=history)
+    table = format_table(rows)
+    insight = generate_answer(question, rows, language=language, history=history)
+    answer = f"{table}\n\n{insight}" if table else insight
     return answer, rows
 
 
