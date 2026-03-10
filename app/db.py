@@ -25,7 +25,7 @@ def run_select(
 
     try:
         dsn_value = dsn or settings.database_dsn
-        with connect(dsn_value, row_factory=dict_row) as conn:
+        with connect(dsn_value, row_factory=dict_row, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 # statement timeout (override or default)
                 timeout = (

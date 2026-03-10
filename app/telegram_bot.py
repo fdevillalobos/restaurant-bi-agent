@@ -14,7 +14,9 @@ from telegram.ext import (
     filters,
 )
 
+from app.analyst import generate_answer
 from app.auth import hash_password, verify_password
+from app.charting import make_chart
 from app.db import run_select, DatabaseError
 from app.llm_planner import question_to_sql
 from app.tenant_store import (
@@ -34,8 +36,10 @@ from app.tenant_store import (
     set_user_restaurants,
     set_session_language,
     set_session_include_sql,
+    get_conversation_history,
+    append_conversation,
+    clear_conversation_history,
 )
-from app.verbalizer import verbalize_answer
 
 
 LOGIN_EMAIL, LOGIN_PASSWORD = range(2)
@@ -129,7 +133,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Session invalid. Please /login again.")
         return
 
-    base_cmds = ["/restaurants", "/language", "/debug", "/whoami", "/logout", "/menu", "/help"]
+    base_cmds = ["/restaurants", "/language", "/debug", "/reset", "/whoami", "/logout", "/menu", "/help"]
     admin_cmds = []
     if user.role == "superuser":
         admin_cmds.extend(["/add_dsn", "/add_user"])
@@ -444,6 +448,16 @@ async def add_user_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return ConversationHandler.END
 
 
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clear the conversation history for this session."""
+    chat_id = update.effective_chat.id
+    if not _session_user(chat_id):
+        await update.message.reply_text("You are not logged in.")
+        return
+    clear_conversation_history(chat_id)
+    await update.message.reply_text("Conversation history cleared. Starting fresh.")
+
+
 async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     if not update.message or not update.message.text:
@@ -467,12 +481,22 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     question = update.message.text or ""
-    plan = question_to_sql(question, restaurant=restaurants[0])
+    language = _session_language(chat_id)
+    history = get_conversation_history(chat_id)
+
+    try:
+        plan = question_to_sql(question, restaurant=restaurants[0], history=history)
+    except Exception as e:
+        msg = f"Could not generate a query: {e}"
+        if language == "es":
+            msg = f"No pude generar la consulta: {e}"
+        await update.message.reply_text(msg)
+        return
+
     sql, params = _apply_restaurant_scope(plan.sql, restaurants)
     if "restaurant" not in params and "restaurants" not in params:
         params = {"restaurant": restaurants[0]}
 
-    language = _session_language(chat_id)
     try:
         rows = run_select(
             sql,
@@ -482,16 +506,29 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             dsn=dsn["dsn"],
         )
 
-        answer = verbalize_answer(question, plan, rows, language=language)
+        answer = generate_answer(question, rows, language=language, history=history)
         if _session_include_sql(chat_id):
-            answer = f"{answer}\n\nSQL:\n{sql}"
+            answer = f"{answer}\n\nSQL:\n```\n{sql}\n```"
         await update.message.reply_text(answer)
+
+        # Send chart if the data warrants one
+        chart_bytes = make_chart(rows, question)
+        if chart_bytes:
+            import io
+            await update.message.reply_photo(
+                photo=io.BytesIO(chart_bytes),
+                caption="Chart",
+            )
+
+        # Persist the exchange to conversation history
+        append_conversation(chat_id, question, answer)
+
     except DatabaseError as e:
         msg = "Query failed. Please try again or contact support."
         if language == "es":
             msg = "La consulta falló. Intenta de nuevo o contacta soporte."
         if _session_include_sql(chat_id):
-            msg = f"{msg}\n\nError:\n{e}\n\nSQL:\n{sql}"
+            msg = f"{msg}\n\nError: {e}\n\nSQL:\n```\n{sql}\n```"
         await update.message.reply_text(msg)
 
 
@@ -506,6 +543,7 @@ def build_app():
             ("restaurants", "Select restaurant(s)"),
             ("language", "Set language (en/es)"),
             ("debug", "Toggle SQL output (on/off)"),
+            ("reset", "Clear conversation history"),
             ("menu", "Show available commands"),
             ("help", "Show available commands"),
             ("whoami", "Show current session info"),
@@ -527,6 +565,7 @@ def main() -> None:
     app.add_handler(CommandHandler("debug", debug))
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CommandHandler("logout", logout))
+    app.add_handler(CommandHandler("reset", reset))
 
     login_conv = ConversationHandler(
         entry_points=[CommandHandler("login", login_start)],

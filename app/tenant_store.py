@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -91,6 +92,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cur.execute("ALTER TABLE sessions ADD COLUMN language TEXT;")
         if "include_sql" not in cols:
             cur.execute("ALTER TABLE sessions ADD COLUMN include_sql INTEGER;")
+        if "conversation_history" not in cols:
+            cur.execute("ALTER TABLE sessions ADD COLUMN conversation_history TEXT;")
         conn.commit()
 
 
@@ -280,6 +283,54 @@ def get_session(chat_id: int, db_path: str = DEFAULT_DB_PATH) -> Optional[Dict[s
         cur.execute("SELECT * FROM sessions WHERE chat_id = ?", (chat_id,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+_MAX_HISTORY_MESSAGES = 20  # 10 exchanges
+
+
+def get_conversation_history(chat_id: int, db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
+    """Return the stored conversation as a list of {role, content} dicts."""
+    sess = get_session(chat_id, db_path=db_path)
+    if not sess or not sess.get("conversation_history"):
+        return []
+    try:
+        return json.loads(sess["conversation_history"])
+    except Exception:
+        return []
+
+
+def append_conversation(
+    chat_id: int,
+    user_message: str,
+    assistant_message: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> None:
+    """Append a user/assistant exchange to the session history, capping at _MAX_HISTORY_MESSAGES."""
+    history = get_conversation_history(chat_id, db_path=db_path)
+    history.append({"role": "user", "content": user_message})
+    history.append({"role": "assistant", "content": assistant_message})
+    # Keep only the most recent messages
+    if len(history) > _MAX_HISTORY_MESSAGES:
+        history = history[-_MAX_HISTORY_MESSAGES:]
+    raw = json.dumps(history)
+    with _connect(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE sessions SET conversation_history = ? WHERE chat_id = ?",
+            (raw, chat_id),
+        )
+        conn.commit()
+
+
+def clear_conversation_history(chat_id: int, db_path: str = DEFAULT_DB_PATH) -> None:
+    """Clear stored conversation history for a session."""
+    with _connect(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE sessions SET conversation_history = NULL WHERE chat_id = ?",
+            (chat_id,),
+        )
+        conn.commit()
 
 
 def get_restaurant_ids_by_names(dsn_id: int, names: List[str], db_path: str = DEFAULT_DB_PATH) -> List[int]:
