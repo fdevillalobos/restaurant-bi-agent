@@ -2,9 +2,38 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 import datetime
+
+
+# --------------------------------------------------------------------------- #
+#  Language detection
+# --------------------------------------------------------------------------- #
+
+_SPANISH_CHARS = re.compile(r"[áéíóúüñ¿¡ÁÉÍÓÚÜÑ]", re.IGNORECASE)
+
+_SPANISH_WORDS = re.compile(
+    r"\b(ventas?|cuánto|cuánta|cuanto|cuanta|cuáles?|cuales?|cuál|cual|"
+    r"semanas?|meses?|años?|días?|dia|promedio|ticket|productos?|categoría|"
+    r"categoria|pagos?|descuentos?|mejor|peor|mayor|menor|último|ultimo|"
+    r"últimos|ultimos|por|del|las|los|una|uno|qué|que|cómo|como|"
+    r"lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|"
+    r"enero|febrero|marzo|abril|mayo|junio|julio|agosto|"
+    r"septiembre|octubre|noviembre|diciembre|"
+    r"hoy|ayer|semana|mes|año|pasadas?|cerradas?|completas?)\b",
+    re.IGNORECASE,
+)
+
+
+def detect_language(text: str) -> str:
+    """Return 'es' if the text appears to be Spanish, otherwise 'en'."""
+    if _SPANISH_CHARS.search(text):
+        return "es"
+    if len(_SPANISH_WORDS.findall(text)) >= 2:
+        return "es"
+    return "en"
 
 
 # --------------------------------------------------------------------------- #

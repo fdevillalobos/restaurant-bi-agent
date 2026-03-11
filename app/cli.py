@@ -7,7 +7,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from app.analyst import generate_answer, format_table
+from app.analyst import generate_answer, format_table, detect_language
 from app.charting import make_chart
 from app.db import run_select, DatabaseError
 from app.llm_planner import question_to_sql
@@ -94,7 +94,7 @@ def _chat_mode(restaurant: str, include_sql: bool, language: str, show_charts: b
             question, restaurant,
             preview=True,
             include_sql=include_sql,
-            language=language,
+            language=language or detect_language(question),
             history=history,
         )
         if answer:
@@ -114,7 +114,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Restaurant BI Agent CLI")
     parser.add_argument("question", nargs="?", help="Question to ask (omit for --chat mode)")
     parser.add_argument("--restaurant", default=None, help="Restaurant name (default: DEFAULT_RESTAURANT env var)")
-    parser.add_argument("--language", default="en", choices=["en", "es"], help="Response language (default: en)")
+    parser.add_argument("--language", default=None, choices=["en", "es"], help="Response language (default: auto-detect from question)")
     parser.add_argument("--chat", action="store_true", help="Interactive chat mode with conversation history")
     parser.add_argument("--no-preview", action="store_true", help="Fetch all rows (no preview limit)")
     parser.add_argument("--include-sql", action="store_true", help="Print the generated SQL")
@@ -128,15 +128,16 @@ def main() -> int:
         return _chat_mode(
             restaurant,
             include_sql=args.include_sql,
-            language=args.language,
+            language=args.language,  # None = auto-detect per question
             show_charts=args.chart,
         )
 
+    lang = args.language or detect_language(args.question)
     answer, rows = _ask(
         args.question, restaurant,
         preview=not args.no_preview,
         include_sql=args.include_sql,
-        language=args.language,
+        language=lang,
         history=[],
     )
     if answer is None:

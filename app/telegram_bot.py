@@ -14,7 +14,7 @@ from telegram.ext import (
     filters,
 )
 
-from app.analyst import generate_answer, format_table
+from app.analyst import generate_answer, format_table, detect_language
 from app.auth import hash_password, verify_password
 from app.charting import make_chart
 from app.db import run_select, DatabaseError
@@ -481,7 +481,7 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     question = update.message.text or ""
-    language = _session_language(chat_id)
+    language = detect_language(question)
     history = get_conversation_history(chat_id)
 
     try:
