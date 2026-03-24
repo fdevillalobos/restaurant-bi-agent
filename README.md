@@ -100,7 +100,57 @@ Answer `yes` and provide a comma-separated list of restaurant names. That user w
 
 ## Running locally
 
-Copy `.env.example` to `.env` and fill in the values.
+### 1. Prerequisites
+
+- Python 3.11
+- [Postgres](https://www.postgresql.org/download/) installed and running locally (`brew install postgresql@16` on macOS)
+
+### 2. Clone and install dependencies
+
+```bash
+git clone https://github.com/fdevillalobos/restaurant-bi-agent.git
+cd restaurant-bi-agent
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+### 3. Create a local Postgres database for the control DB
+
+```bash
+createdb restaurant_bi_control
+```
+
+### 4. Configure environment variables
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and fill in at minimum:
+
+```bash
+CONTROL_DB_DSN=postgresql://localhost/restaurant_bi_control
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
+TELEGRAM_BOT_TOKEN=123456:ABC-...
+```
+
+### 5. Initialize the control DB and create a superuser
+
+```bash
+.venv/bin/python -m app.admin_cli init-db
+.venv/bin/python -m app.admin_cli create-superuser --email you@example.com --password "yourpassword"
+```
+
+### 6. Run the bot
+
+```bash
+.venv/bin/python -m app.telegram_bot
+```
+
+Open Telegram → `/login` → `/add_dsn` to register your Fudo connection → `/restaurants` → start asking questions.
+
+### Other useful commands
 
 ```bash
 # One-off question (CLI)
@@ -108,9 +158,20 @@ Copy `.env.example` to `.env` and fill in the values.
 
 # Interactive REPL
 .venv/bin/python -m app.cli --chat
+```
 
-# Telegram bot
-.venv/bin/python -m app.telegram_bot
+### Resetting a superuser password
+
+```bash
+.venv/bin/python -c "
+from app.auth import hash_password
+from app.tenant_store import _connect
+with _connect() as conn:
+    with conn.cursor() as cur:
+        cur.execute('UPDATE users SET password_hash = %s WHERE email = %s', (hash_password('newpassword'), 'you@example.com'))
+    conn.commit()
+print('Password updated.')
+"
 ```
 
 ---
