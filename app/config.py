@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
@@ -5,7 +6,7 @@ from pydantic import Field
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_dsn: str = Field(alias="DATABASE_DSN")
+    database_dsn: Optional[str] = Field(default=None, alias="DATABASE_DSN")
 
     statement_timeout_ms: int = Field(default=8000, alias="STATEMENT_TIMEOUT_MS")
     max_returned_rows: int = Field(default=5000, alias="MAX_RETURNED_ROWS")
