@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
 
 import psycopg
+from psycopg.rows import dict_row
 
 
-DEFAULT_DB_PATH = os.getenv("CONTROL_DB_PATH", "control.db")
+DEFAULT_DB_DSN = os.getenv("CONTROL_DB_DSN", "")
 
 
 @dataclass
@@ -21,115 +21,102 @@ class User:
     dsn_id: Optional[int]
 
 
-def _connect(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _connect(db_dsn: str = DEFAULT_DB_DSN) -> psycopg.Connection:
+    return psycopg.connect(db_dsn, row_factory=dict_row)
 
 
-def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS dsns (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                dsn TEXT NOT NULL
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL,
-                dsn_id INTEGER,
-                FOREIGN KEY (dsn_id) REFERENCES dsns(id)
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS restaurants (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                dsn_id INTEGER NOT NULL,
-                UNIQUE (name, dsn_id),
-                FOREIGN KEY (dsn_id) REFERENCES dsns(id)
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_restaurants (
-                user_id INTEGER NOT NULL,
-                restaurant_id INTEGER NOT NULL,
-                UNIQUE (user_id, restaurant_id),
-                FOREIGN KEY (user_id) REFERENCES users(id),
-                FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sessions (
-                chat_id INTEGER PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                selected_restaurants TEXT,
-                language TEXT,
-                include_sql INTEGER,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
-            """
-        )
-        # lightweight migration for existing DBs
-        cur.execute("PRAGMA table_info(sessions)")
-        cols = {row[1] for row in cur.fetchall()}
-        if "language" not in cols:
-            cur.execute("ALTER TABLE sessions ADD COLUMN language TEXT;")
-        if "include_sql" not in cols:
-            cur.execute("ALTER TABLE sessions ADD COLUMN include_sql INTEGER;")
-        if "conversation_history" not in cols:
-            cur.execute("ALTER TABLE sessions ADD COLUMN conversation_history TEXT;")
+def init_db(db_dsn: str = DEFAULT_DB_DSN) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dsns (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    dsn TEXT NOT NULL
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    email TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    dsn_id INTEGER REFERENCES dsns(id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS restaurants (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    dsn_id INTEGER NOT NULL REFERENCES dsns(id),
+                    UNIQUE (name, dsn_id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_restaurants (
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    restaurant_id INTEGER NOT NULL REFERENCES restaurants(id),
+                    UNIQUE (user_id, restaurant_id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    chat_id BIGINT PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    selected_restaurants TEXT,
+                    language TEXT,
+                    include_sql BOOLEAN,
+                    conversation_history TEXT
+                );
+                """
+            )
         conn.commit()
 
 
-def create_dsn(name: str, dsn: str, db_path: str = DEFAULT_DB_PATH) -> int:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO dsns (name, dsn) VALUES (?, ?)", (name, dsn))
+def create_dsn(name: str, dsn: str, db_dsn: str = DEFAULT_DB_DSN) -> int:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO dsns (name, dsn) VALUES (%s, %s) RETURNING id",
+                (name, dsn),
+            )
+            row = cur.fetchone()
         conn.commit()
-        return int(cur.lastrowid)
+        return int(row["id"])
 
 
-def get_dsn_by_name(name: str, db_path: str = DEFAULT_DB_PATH) -> Optional[Dict[str, Any]]:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM dsns WHERE name = ?", (name,))
-        row = cur.fetchone()
-        return dict(row) if row else None
+def get_dsn_by_name(name: str, db_dsn: str = DEFAULT_DB_DSN) -> Optional[Dict[str, Any]]:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM dsns WHERE name = %s", (name,))
+            return cur.fetchone()
 
 
-def list_dsns(db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM dsns ORDER BY name")
-        return [dict(r) for r in cur.fetchall()]
+def list_dsns(db_dsn: str = DEFAULT_DB_DSN) -> List[Dict[str, Any]]:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM dsns ORDER BY name")
+            return cur.fetchall()
 
 
-def get_dsn_by_id(dsn_id: int, db_path: str = DEFAULT_DB_PATH) -> Optional[Dict[str, Any]]:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM dsns WHERE id = ?", (dsn_id,))
-        row = cur.fetchone()
-        return dict(row) if row else None
+def get_dsn_by_id(dsn_id: int, db_dsn: str = DEFAULT_DB_DSN) -> Optional[Dict[str, Any]]:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM dsns WHERE id = %s", (dsn_id,))
+            return cur.fetchone()
 
 
-def sync_restaurants_from_dsn(dsn_id: int, db_path: str = DEFAULT_DB_PATH) -> int:
-    dsn = get_dsn_by_id(dsn_id, db_path=db_path)
+def sync_restaurants_from_dsn(dsn_id: int, db_dsn: str = DEFAULT_DB_DSN) -> int:
+    dsn = get_dsn_by_id(dsn_id, db_dsn=db_dsn)
     if not dsn:
         raise ValueError("DSN not found")
     dsn_value = dsn["dsn"]
@@ -139,22 +126,25 @@ def sync_restaurants_from_dsn(dsn_id: int, db_path: str = DEFAULT_DB_PATH) -> in
             rows = cur.fetchall()
 
     names = [r[0] for r in rows if r and r[0] is not None]
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        for name in names:
-            cur.execute(
-                "INSERT OR IGNORE INTO restaurants (name, dsn_id) VALUES (?, ?)",
-                (name, dsn_id),
-            )
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            for name in names:
+                cur.execute(
+                    "INSERT INTO restaurants (name, dsn_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (name, dsn_id),
+                )
         conn.commit()
     return len(names)
 
 
-def list_restaurants_by_dsn(dsn_id: int, db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM restaurants WHERE dsn_id = ? ORDER BY name", (dsn_id,))
-        return [dict(r) for r in cur.fetchall()]
+def list_restaurants_by_dsn(dsn_id: int, db_dsn: str = DEFAULT_DB_DSN) -> List[Dict[str, Any]]:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM restaurants WHERE dsn_id = %s ORDER BY name",
+                (dsn_id,),
+            )
+            return cur.fetchall()
 
 
 def create_user(
@@ -162,135 +152,149 @@ def create_user(
     password_hash: str,
     role: str,
     dsn_id: Optional[int],
-    db_path: str = DEFAULT_DB_PATH,
+    db_dsn: str = DEFAULT_DB_DSN,
 ) -> int:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO users (email, password_hash, role, dsn_id) VALUES (?, ?, ?, ?)",
-            (email, password_hash, role, dsn_id),
-        )
-        conn.commit()
-        return int(cur.lastrowid)
-
-
-def get_user_by_email(email: str, db_path: str = DEFAULT_DB_PATH) -> Optional[User]:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM users WHERE email = ?", (email,))
-        row = cur.fetchone()
-        if not row:
-            return None
-        return User(
-            id=row["id"],
-            email=row["email"],
-            password_hash=row["password_hash"],
-            role=row["role"],
-            dsn_id=row["dsn_id"],
-        )
-
-
-def get_user_by_id(user_id: int, db_path: str = DEFAULT_DB_PATH) -> Optional[User]:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-        row = cur.fetchone()
-        if not row:
-            return None
-        return User(
-            id=row["id"],
-            email=row["email"],
-            password_hash=row["password_hash"],
-            role=row["role"],
-            dsn_id=row["dsn_id"],
-        )
-
-
-def set_user_restaurants(user_id: int, restaurant_ids: List[int], db_path: str = DEFAULT_DB_PATH) -> None:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM user_restaurants WHERE user_id = ?", (user_id,))
-        for rid in restaurant_ids:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
             cur.execute(
-                "INSERT OR IGNORE INTO user_restaurants (user_id, restaurant_id) VALUES (?, ?)",
-                (user_id, rid),
+                "INSERT INTO users (email, password_hash, role, dsn_id) VALUES (%s, %s, %s, %s) RETURNING id",
+                (email, password_hash, role, dsn_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return int(row["id"])
+
+
+def get_user_by_email(email: str, db_dsn: str = DEFAULT_DB_DSN) -> Optional[User]:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE email = %s", (email,))
+            row = cur.fetchone()
+    if not row:
+        return None
+    return User(
+        id=row["id"],
+        email=row["email"],
+        password_hash=row["password_hash"],
+        role=row["role"],
+        dsn_id=row["dsn_id"],
+    )
+
+
+def get_user_by_id(user_id: int, db_dsn: str = DEFAULT_DB_DSN) -> Optional[User]:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+    if not row:
+        return None
+    return User(
+        id=row["id"],
+        email=row["email"],
+        password_hash=row["password_hash"],
+        role=row["role"],
+        dsn_id=row["dsn_id"],
+    )
+
+
+def set_user_restaurants(
+    user_id: int, restaurant_ids: List[int], db_dsn: str = DEFAULT_DB_DSN
+) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM user_restaurants WHERE user_id = %s", (user_id,))
+            for rid in restaurant_ids:
+                cur.execute(
+                    "INSERT INTO user_restaurants (user_id, restaurant_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (user_id, rid),
+                )
+        conn.commit()
+
+
+def list_user_restaurants(user_id: int, db_dsn: str = DEFAULT_DB_DSN) -> List[Dict[str, Any]]:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT r.* FROM restaurants r
+                JOIN user_restaurants ur ON ur.restaurant_id = r.id
+                WHERE ur.user_id = %s
+                ORDER BY r.name
+                """,
+                (user_id,),
+            )
+            return cur.fetchall()
+
+
+def list_accessible_restaurants(user: User, db_dsn: str = DEFAULT_DB_DSN) -> List[Dict[str, Any]]:
+    if user.dsn_id is None:
+        return []
+    restricted = list_user_restaurants(user.id, db_dsn=db_dsn)
+    if restricted:
+        return restricted
+    return list_restaurants_by_dsn(user.dsn_id, db_dsn=db_dsn)
+
+
+def set_session(
+    chat_id: int,
+    user_id: int,
+    selected_restaurants: Optional[str],
+    db_dsn: str = DEFAULT_DB_DSN,
+) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO sessions (chat_id, user_id, selected_restaurants)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (chat_id) DO UPDATE
+                SET user_id = EXCLUDED.user_id,
+                    selected_restaurants = EXCLUDED.selected_restaurants
+                """,
+                (chat_id, user_id, selected_restaurants),
             )
         conn.commit()
 
 
-def list_user_restaurants(user_id: int, db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT r.* FROM restaurants r
-            JOIN user_restaurants ur ON ur.restaurant_id = r.id
-            WHERE ur.user_id = ?
-            ORDER BY r.name
-            """,
-            (user_id,),
-        )
-        return [dict(r) for r in cur.fetchall()]
-
-
-def list_accessible_restaurants(user: User, db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
-    if user.dsn_id is None:
-        return []
-    restricted = list_user_restaurants(user.id, db_path=db_path)
-    if restricted:
-        return restricted
-    return list_restaurants_by_dsn(user.dsn_id, db_path=db_path)
-
-
-def set_session(chat_id: int, user_id: int, selected_restaurants: Optional[str], db_path: str = DEFAULT_DB_PATH) -> None:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO sessions (chat_id, user_id, selected_restaurants) VALUES (?, ?, ?) "
-            "ON CONFLICT(chat_id) DO UPDATE SET user_id = excluded.user_id, selected_restaurants = excluded.selected_restaurants",
-            (chat_id, user_id, selected_restaurants),
-        )
+def set_session_language(chat_id: int, language: str, db_dsn: str = DEFAULT_DB_DSN) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE sessions SET language = %s WHERE chat_id = %s",
+                (language, chat_id),
+            )
         conn.commit()
 
 
-def set_session_language(chat_id: int, language: str, db_path: str = DEFAULT_DB_PATH) -> None:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("UPDATE sessions SET language = ? WHERE chat_id = ?", (language, chat_id))
+def set_session_include_sql(chat_id: int, include_sql: bool, db_dsn: str = DEFAULT_DB_DSN) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE sessions SET include_sql = %s WHERE chat_id = %s",
+                (include_sql, chat_id),
+            )
         conn.commit()
 
 
-def set_session_include_sql(chat_id: int, include_sql: bool, db_path: str = DEFAULT_DB_PATH) -> None:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE sessions SET include_sql = ? WHERE chat_id = ?",
-            (1 if include_sql else 0, chat_id),
-        )
+def clear_session(chat_id: int, db_dsn: str = DEFAULT_DB_DSN) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM sessions WHERE chat_id = %s", (chat_id,))
         conn.commit()
 
 
-def clear_session(chat_id: int, db_path: str = DEFAULT_DB_PATH) -> None:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
-        conn.commit()
-
-
-def get_session(chat_id: int, db_path: str = DEFAULT_DB_PATH) -> Optional[Dict[str, Any]]:
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM sessions WHERE chat_id = ?", (chat_id,))
-        row = cur.fetchone()
-        return dict(row) if row else None
+def get_session(chat_id: int, db_dsn: str = DEFAULT_DB_DSN) -> Optional[Dict[str, Any]]:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM sessions WHERE chat_id = %s", (chat_id,))
+            return cur.fetchone()
 
 
 _MAX_HISTORY_MESSAGES = 20  # 10 exchanges
 
 
-def get_conversation_history(chat_id: int, db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
-    """Return the stored conversation as a list of {role, content} dicts."""
-    sess = get_session(chat_id, db_path=db_path)
+def get_conversation_history(chat_id: int, db_dsn: str = DEFAULT_DB_DSN) -> List[Dict[str, Any]]:
+    sess = get_session(chat_id, db_dsn=db_dsn)
     if not sess or not sess.get("conversation_history"):
         return []
     try:
@@ -303,44 +307,42 @@ def append_conversation(
     chat_id: int,
     user_message: str,
     assistant_message: str,
-    db_path: str = DEFAULT_DB_PATH,
+    db_dsn: str = DEFAULT_DB_DSN,
 ) -> None:
-    """Append a user/assistant exchange to the session history, capping at _MAX_HISTORY_MESSAGES."""
-    history = get_conversation_history(chat_id, db_path=db_path)
+    history = get_conversation_history(chat_id, db_dsn=db_dsn)
     history.append({"role": "user", "content": user_message})
     history.append({"role": "assistant", "content": assistant_message})
-    # Keep only the most recent messages
     if len(history) > _MAX_HISTORY_MESSAGES:
         history = history[-_MAX_HISTORY_MESSAGES:]
     raw = json.dumps(history)
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE sessions SET conversation_history = ? WHERE chat_id = ?",
-            (raw, chat_id),
-        )
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE sessions SET conversation_history = %s WHERE chat_id = %s",
+                (raw, chat_id),
+            )
         conn.commit()
 
 
-def clear_conversation_history(chat_id: int, db_path: str = DEFAULT_DB_PATH) -> None:
-    """Clear stored conversation history for a session."""
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE sessions SET conversation_history = NULL WHERE chat_id = ?",
-            (chat_id,),
-        )
+def clear_conversation_history(chat_id: int, db_dsn: str = DEFAULT_DB_DSN) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE sessions SET conversation_history = NULL WHERE chat_id = %s",
+                (chat_id,),
+            )
         conn.commit()
 
 
-def get_restaurant_ids_by_names(dsn_id: int, names: List[str], db_path: str = DEFAULT_DB_PATH) -> List[int]:
+def get_restaurant_ids_by_names(
+    dsn_id: int, names: List[str], db_dsn: str = DEFAULT_DB_DSN
+) -> List[int]:
     if not names:
         return []
-    with _connect(db_path) as conn:
-        cur = conn.cursor()
-        placeholders = ",".join("?" for _ in names)
-        cur.execute(
-            f"SELECT id FROM restaurants WHERE dsn_id = ? AND name IN ({placeholders})",
-            [dsn_id] + names,
-        )
-        return [r["id"] for r in cur.fetchall()]
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM restaurants WHERE dsn_id = %s AND name = ANY(%s)",
+                (dsn_id, names),
+            )
+            return [r["id"] for r in cur.fetchall()]

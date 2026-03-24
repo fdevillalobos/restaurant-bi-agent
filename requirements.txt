@@ -9,3 +9,4 @@ python-dotenv==1.0.1
 httpx<0.28
 python-telegram-bot==21.6
 bcrypt==4.2.0
+matplotlib>=3.9
