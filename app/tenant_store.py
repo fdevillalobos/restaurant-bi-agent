@@ -355,7 +355,7 @@ def list_users(dsn_id: Optional[int] = None, db_dsn: str = DEFAULT_DB_DSN) -> Li
                 cur.execute(
                     """
                     SELECT u.id, u.email, u.role, u.dsn_id,
-                           COALESCE(d.name, 'none') AS dsn_name
+                           COALESCE(d.name, '(none)') AS dsn_name
                     FROM users u
                     LEFT JOIN dsns d ON d.id = u.dsn_id
                     WHERE u.dsn_id = %s
@@ -367,7 +367,7 @@ def list_users(dsn_id: Optional[int] = None, db_dsn: str = DEFAULT_DB_DSN) -> Li
                 cur.execute(
                     """
                     SELECT u.id, u.email, u.role, u.dsn_id,
-                           COALESCE(d.name, 'none') AS dsn_name
+                           COALESCE(d.name, '(none)') AS dsn_name
                     FROM users u
                     LEFT JOIN dsns d ON d.id = u.dsn_id
                     ORDER BY u.email
