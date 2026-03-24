@@ -5,6 +5,7 @@ import os
 from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
+from psycopg.errors import UniqueViolation
 from telegram import Update
 from telegram.error import Conflict
 from telegram.ext import (
@@ -47,6 +48,11 @@ from app.tenant_store import (
     get_conversation_history,
     append_conversation,
     clear_conversation_history,
+    list_users,
+    list_user_restaurants,
+    update_user_password,
+    update_user_role,
+    update_user_dsn,
 )
 
 
@@ -54,6 +60,7 @@ LOGIN_EMAIL, LOGIN_PASSWORD = range(2)
 ADD_DSN_NAME, ADD_DSN_VALUE, ADD_DSN_CONFIRM = range(2, 5)
 ADD_USER_EMAIL, ADD_USER_PASSWORD, ADD_USER_ROLE, ADD_USER_DSN, ADD_USER_LIMIT, ADD_USER_RESTAURANTS, ADD_USER_CONFIRM = range(5, 12)
 RESTAURANT_SELECT = 12
+EDIT_USER_EMAIL, EDIT_USER_FIELD, EDIT_USER_VALUE, EDIT_USER_CONFIRM = range(13, 17)
 
 
 def _token() -> str:
@@ -144,9 +151,9 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     base_cmds = ["/restaurants", "/language", "/debug", "/reset", "/whoami", "/logout", "/menu", "/help"]
     admin_cmds = []
     if user.role == "superuser":
-        admin_cmds.extend(["/add_dsn", "/add_user"])
+        admin_cmds.extend(["/add_dsn", "/add_user", "/list_users", "/edit_user"])
     elif user.role == "admin":
-        admin_cmds.append("/add_user")
+        admin_cmds.extend(["/add_user", "/list_users", "/edit_user"])
 
     msg = "Commands:\n" + "\n".join(base_cmds + admin_cmds)
     await update.message.reply_text(msg)
@@ -443,7 +450,13 @@ async def add_user_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     dsn_id = context.user_data.get("new_dsn_id")
 
     pwd_hash = hash_password(password)
-    user_id = create_user(email, pwd_hash, role=role, dsn_id=dsn_id)
+    try:
+        user_id = create_user(email, pwd_hash, role=role, dsn_id=dsn_id)
+    except UniqueViolation:
+        await update.message.reply_text(
+            "A user with that email already exists. Use /edit_user to modify an existing user."
+        )
+        return ConversationHandler.END
 
     if context.user_data.get("limit_restaurants"):
         names = context.user_data.get("new_restaurants", [])
@@ -552,6 +565,233 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(msg)
 
 
+async def list_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    user_id = _session_user(chat_id)
+    user = get_user_by_id(user_id) if user_id else None
+    if not user or user.role not in ("superuser", "admin"):
+        await update.message.reply_text("Unauthorized.")
+        return
+
+    dsn_filter = None if user.role == "superuser" else user.dsn_id
+    users = list_users(dsn_id=dsn_filter)
+
+    if not users:
+        await update.message.reply_text("No users found.")
+        return
+
+    for i in range(0, len(users), 10):
+        batch = users[i:i + 10]
+        lines = []
+        for u in batch:
+            restaurants = ", ".join(u["restaurants"]) if u["restaurants"] else "(all)"
+            lines.append(
+                f"{u['email']} — {u['role']}\n"
+                f"DSN: {u['dsn_name']}\n"
+                f"Restaurants: {restaurants}"
+            )
+        await update.message.reply_text("\n\n".join(lines))
+
+
+async def edit_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = _session_user(update.effective_chat.id)
+    user = get_user_by_id(user_id) if user_id else None
+    if not user or user.role not in ("superuser", "admin"):
+        await update.message.reply_text("Unauthorized.")
+        return ConversationHandler.END
+    await update.message.reply_text("Email of user to edit:")
+    return EDIT_USER_EMAIL
+
+
+async def edit_user_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    editor_id = _session_user(update.effective_chat.id)
+    editor = get_user_by_id(editor_id)
+    email = (update.message.text or "").strip()
+    target = get_user_by_email(email)
+
+    if not target:
+        await update.message.reply_text("User not found.")
+        return ConversationHandler.END
+
+    if editor.role == "admin":
+        if target.dsn_id != editor.dsn_id or target.role in ("admin", "superuser"):
+            await update.message.reply_text("Unauthorized.")
+            return ConversationHandler.END
+
+    context.user_data["edit_target"] = target
+
+    dsn = get_dsn_by_id(target.dsn_id) if target.dsn_id else None
+    restaurants = list_user_restaurants(target.id)
+    rest_names = ", ".join(r["name"] for r in restaurants) if restaurants else "(all)"
+    info = (
+        f"User: {target.email}\n"
+        f"Role: {target.role}\n"
+        f"DSN: {dsn['name'] if dsn else '(none)'}\n"
+        f"Restaurants: {rest_names}"
+    )
+
+    fields = "password / role / restaurants"
+    if editor.role == "superuser":
+        fields += " / dsn"
+
+    await update.message.reply_text(f"{info}\n\nWhat would you like to change? ({fields})")
+    return EDIT_USER_FIELD
+
+
+async def edit_user_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    editor_id = _session_user(update.effective_chat.id)
+    editor = get_user_by_id(editor_id)
+    target = context.user_data["edit_target"]
+    field = (update.message.text or "").strip().lower()
+
+    allowed_fields = {"password", "role", "restaurants"}
+    if editor.role == "superuser":
+        allowed_fields.add("dsn")
+
+    if field not in allowed_fields:
+        await update.message.reply_text(
+            f"Invalid field. Choose: {' / '.join(sorted(allowed_fields))}"
+        )
+        return EDIT_USER_FIELD
+
+    context.user_data["edit_field"] = field
+
+    if field == "password":
+        await update.message.reply_text("New password:")
+
+    elif field == "role":
+        if editor.role == "superuser":
+            await update.message.reply_text("New role (user / db_admin / admin / superuser):")
+        else:
+            await update.message.reply_text("New role (user / db_admin):")
+
+    elif field == "restaurants":
+        if not target.dsn_id:
+            await update.message.reply_text(
+                "Cannot set restaurant restrictions: this user has no DSN assigned. Assign a DSN first."
+            )
+            return ConversationHandler.END
+        available = list_restaurants_by_dsn(target.dsn_id)
+        names_list = "\n".join(r["name"] for r in available)
+        await update.message.reply_text(
+            f"Enter restaurant names (comma-separated), or 'all' to remove restrictions:\n{names_list}"
+        )
+
+    elif field == "dsn":
+        dsns = list_dsns()
+        if not dsns:
+            await update.message.reply_text("No DSNs available.")
+            return ConversationHandler.END
+        context.user_data["dsn_list"] = dsns
+        options = "0. (none)\n" + "\n".join(f"{i + 1}. {d['name']}" for i, d in enumerate(dsns))
+        await update.message.reply_text(f"Select DSN by number:\n{options}")
+
+    return EDIT_USER_VALUE
+
+
+async def edit_user_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    editor_id = _session_user(update.effective_chat.id)
+    editor = get_user_by_id(editor_id)
+    field = context.user_data["edit_field"]
+    target = context.user_data["edit_target"]
+    text = (update.message.text or "").strip()
+
+    if field == "password":
+        context.user_data["edit_value"] = text
+        await update.message.reply_text(
+            f"Confirm: set new password for {target.email}? (yes/no)"
+        )
+        return EDIT_USER_CONFIRM
+
+    elif field == "role":
+        allowed_roles = (
+            {"user", "db_admin", "admin", "superuser"}
+            if editor.role == "superuser"
+            else {"user", "db_admin"}
+        )
+        if text not in allowed_roles:
+            await update.message.reply_text(
+                f"Invalid role. Choose: {' / '.join(sorted(allowed_roles))}"
+            )
+            return EDIT_USER_VALUE
+        context.user_data["edit_value"] = text
+        await update.message.reply_text(
+            f"Confirm: change {target.email}'s role to '{text}'? (yes/no)"
+        )
+        return EDIT_USER_CONFIRM
+
+    elif field == "restaurants":
+        if text.lower() == "all":
+            context.user_data["edit_value"] = []
+            await update.message.reply_text(
+                f"Confirm: remove all restaurant restrictions for {target.email}? (yes/no)"
+            )
+            return EDIT_USER_CONFIRM
+
+        names = _parse_csv(text)
+        available = list_restaurants_by_dsn(target.dsn_id)
+        valid_map = {r["name"]: r["id"] for r in available}
+        skipped = [n for n in names if n not in valid_map]
+        kept = [n for n in names if n in valid_map]
+        ids = [valid_map[n] for n in kept]
+
+        context.user_data["edit_value"] = ids
+        confirm_str = ", ".join(kept) if kept else "(none)"
+        warning = f"\nWarning: not found and skipped: {', '.join(skipped)}" if skipped else ""
+        await update.message.reply_text(
+            f"Confirm: restrict {target.email} to: {confirm_str}?{warning} (yes/no)"
+        )
+        return EDIT_USER_CONFIRM
+
+    elif field == "dsn":
+        dsns = context.user_data.get("dsn_list", [])
+        try:
+            idx = int(text)
+            if idx == 0:
+                context.user_data["edit_value"] = None
+                await update.message.reply_text(
+                    f"Confirm: unassign DSN from {target.email}? (yes/no)"
+                )
+            else:
+                dsn = dsns[idx - 1]
+                context.user_data["edit_value"] = dsn["id"]
+                await update.message.reply_text(
+                    f"Confirm: set {target.email}'s DSN to '{dsn['name']}'? (yes/no)"
+                )
+        except (ValueError, IndexError):
+            options = "0. (none)\n" + "\n".join(
+                f"{i + 1}. {d['name']}" for i, d in enumerate(dsns)
+            )
+            await update.message.reply_text(f"Invalid selection. Choose:\n{options}")
+            return EDIT_USER_VALUE
+        return EDIT_USER_CONFIRM
+
+    return ConversationHandler.END
+
+
+async def edit_user_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    answer = (update.message.text or "").strip().lower()
+    if answer not in ("yes", "y"):
+        await update.message.reply_text("Cancelled.")
+        return ConversationHandler.END
+
+    field = context.user_data["edit_field"]
+    target = context.user_data["edit_target"]
+    value = context.user_data["edit_value"]
+
+    if field == "password":
+        update_user_password(target.id, hash_password(value))
+    elif field == "role":
+        update_user_role(target.id, value)
+    elif field == "restaurants":
+        set_user_restaurants(target.id, value)
+    elif field == "dsn":
+        update_user_dsn(target.id, value)
+
+    await update.message.reply_text("Done.")
+    return ConversationHandler.END
+
+
 async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(context.error, Conflict):
         logger.warning("Conflict: another bot instance is running — retrying...")
@@ -576,6 +816,8 @@ def build_app():
             ("whoami", "Show current session info"),
             ("add_user", "Create a user (admin/superuser)"),
             ("add_dsn", "Add a DSN (superuser)"),
+            ("list_users", "List all users (admin/superuser)"),
+            ("edit_user", "Edit a user (admin/superuser)"),
         ]
         await app.bot.set_my_commands(commands)
 
@@ -595,6 +837,7 @@ def main() -> None:
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CommandHandler("logout", logout))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("list_users", list_users_cmd))
 
     login_conv = ConversationHandler(
         entry_points=[CommandHandler("login", login_start)],
@@ -638,6 +881,18 @@ def main() -> None:
         fallbacks=[],
     )
     app.add_handler(add_user_conv)
+
+    edit_user_conv = ConversationHandler(
+        entry_points=[CommandHandler("edit_user", edit_user_start)],
+        states={
+            EDIT_USER_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_user_email)],
+            EDIT_USER_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_user_field)],
+            EDIT_USER_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_user_value)],
+            EDIT_USER_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_user_confirm)],
+        },
+        fallbacks=[],
+    )
+    app.add_handler(edit_user_conv)
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question))
 
