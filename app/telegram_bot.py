@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 from telegram import Update
+from telegram.error import Conflict
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -13,6 +15,12 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
 from app.analyst import generate_answer, format_table, detect_language
 from app.auth import hash_password, verify_password
@@ -544,6 +552,13 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(msg)
 
 
+async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if isinstance(context.error, Conflict):
+        logger.warning("Conflict: another bot instance is running — retrying...")
+        return
+    logger.error("Unhandled error: %s", context.error, exc_info=context.error)
+
+
 def build_app():
     load_dotenv()
     init_db()
@@ -564,7 +579,9 @@ def build_app():
         ]
         await app.bot.set_my_commands(commands)
 
-    return ApplicationBuilder().token(_token()).post_init(post_init).build()
+    app = ApplicationBuilder().token(_token()).post_init(post_init).build()
+    app.add_error_handler(handle_error)
+    return app
 
 
 def main() -> None:
