@@ -40,6 +40,8 @@ Updates `role` for the given user.
 ### `update_user_dsn(user_id: int, dsn_id: Optional[int]) → None`
 Updates `dsn_id` for the given user. Accepts `None` to unassign DSN.
 
+**Note:** Restaurant edits reuse the existing `set_user_restaurants(user_id, restaurant_ids)` and `get_restaurant_ids_by_names(dsn_id, names)` functions. Name-to-ID resolution always uses the **target user's `dsn_id`**, not the editing user's.
+
 ---
 
 ## 3. `/list_users` Command
@@ -49,9 +51,9 @@ Updates `dsn_id` for the given user. Accepts `None` to unassign DSN.
 **Access:**
 - `superuser` — lists all users across all DSNs
 - `admin` — lists only users assigned to their own DSN
-- Others — "Unauthorized."
+- `db_admin`, `user` — "Unauthorized."
 
-**Output format** (one block per user, batched into messages of ≤ 10 users to stay within Telegram limits):
+**Output format** — batched into messages of ≤ 10 users (conservative estimate to stay safely under Telegram's 4096-character message limit, given variable email and restaurant name lengths):
 ```
 user@example.com — admin
 DSN: gamba
@@ -66,64 +68,85 @@ DSN: (none)
 Restaurants: (all)
 ```
 
+User lookup in the edit flow uses `get_user_by_email` (already in `tenant_store.py`).
+
 ---
 
 ## 4. `/edit_user` Conversation Flow
 
 **File:** `app/telegram_bot.py`
 
-**States:**
-```
-EDIT_USER_EMAIL → EDIT_USER_FIELD → EDIT_USER_VALUE → EDIT_USER_CONFIRM
+### Conversation state constants
+
+Existing constants occupy 0–12. New constants start at 13:
+
+```python
+EDIT_USER_EMAIL, EDIT_USER_FIELD, EDIT_USER_VALUE, EDIT_USER_CONFIRM = range(13, 17)
 ```
 
-**Flow:**
+### Flow
+
 ```
 /edit_user
 → "Email of user to edit:"
-→ [look up user, show current info]
-→ "What would you like to change?
-   - password
-   - role
-   - restaurants
-   - dsn"          ← only shown to superuser
+→ [look up user via get_user_by_email; show current info: role, DSN, restaurants]
+→ "What would you like to change? (password / role / restaurants / dsn)"
+   ← 'dsn' option only shown to superusers
 → [field-specific prompt and input]
 → "Confirm change? (yes/no)"
 → "Done." or "Cancelled."
 ```
 
-**Per-field prompts:**
+No `/cancel` fallback — consistent with all existing conversation handlers which use `fallbacks=[]`.
+
+### Per-field prompts
 
 | Field | Prompt | Input |
 |---|---|---|
 | password | "New password:" | plain text, hashed before saving |
-| role | "New role (user / db_admin / admin):" | validated against allowed values |
-| restaurants | "Enter restaurant names (comma-separated), or 'all' to remove restrictions:" | parsed CSV or keyword `all` |
-| dsn | "Select DSN by number:\n1. gamba\n2. ..." | number picker from list of all DSNs |
+| role | "New role:" followed by allowed options for the editor's role | validated against allowed values per permission matrix |
+| restaurants | "Enter restaurant names (comma-separated), or 'all' to remove restrictions:\n[lists available restaurants from target user's DSN]" | parsed CSV or keyword `all` |
+| dsn | "Select DSN by number:\n0. (none)\n1. gamba\n2. ..." | number picker; option 0 unassigns DSN (sets to NULL) |
 
-**Permission matrix:**
+**Role prompt options by editor role:**
+- Superuser editing: shows `user / db_admin / admin / superuser`
+- Admin editing: shows `user / db_admin` only
 
-| Action | Superuser | Admin |
-|---|---|---|
-| Edit any user's password | ✓ | Own DSN users only (not other admins/superusers) |
-| Edit role → user/db_admin | ✓ | Own DSN users only |
-| Edit role → admin | ✓ | ✗ |
-| Edit role → superuser | ✓ | ✗ |
-| Edit restaurants | ✓ | Own DSN users only (not other admins/superusers) |
-| Edit DSN | ✓ (including own) | ✗ |
+**Restaurant name mismatch handling:** If any entered name does not match an existing restaurant in the target user's DSN, skip it silently and include a warning in the confirmation:
+> "Warning: the following names were not found and were skipped: X, Y"
+
+### Permission matrix
+
+| Action | Superuser | Admin | db_admin / user |
+|---|---|---|---|
+| Access `/edit_user` | ✓ | ✓ | ✗ Unauthorized |
+| Edit any user's password | ✓ | Own DSN, non-admin/superuser only | ✗ |
+| Edit role → user/db_admin | ✓ | Own DSN, non-admin/superuser only | ✗ |
+| Edit role → admin | ✓ | ✗ | ✗ |
+| Edit role → superuser | ✓ | ✗ | ✗ |
+| Edit restaurants | ✓ | Own DSN, non-admin/superuser only | ✗ |
+| Edit DSN | ✓ (including own) | ✗ | ✗ |
 
 **Guard rules:**
-- If target user not found → "User not found."
-- If admin tries to edit a user outside their DSN → "Unauthorized."
-- If admin tries to edit another admin or superuser → "Unauthorized."
-- If admin tries to change role to admin or above → "Unauthorized."
-- `dsn` field option is only shown to superusers
+- Target user not found → "User not found."
+- Admin tries to edit user outside their DSN → "Unauthorized."
+- Admin tries to edit another admin or superuser → "Unauthorized."
+- Admin tries to set role to admin or above → "Unauthorized."
+- `dsn` option not offered to admins in the field selection prompt
+
+---
+
+## 5. Additional locations to update in telegram_bot.py
+
+- `menu()` function — add `/list_users` and `/edit_user` to the commands shown to `admin` and `superuser`
+- `post_init` / `set_my_commands` — register both new commands with descriptions
+- `build_app` / `main` — register `CommandHandler` for `/list_users` and `ConversationHandler` for `/edit_user`
 
 ---
 
 ## Files Changed
 
-| File | Change |
+| File | What changes |
 |---|---|
 | `app/tenant_store.py` | Add `list_users`, `update_user_password`, `update_user_role`, `update_user_dsn` |
-| `app/telegram_bot.py` | Fix duplicate error in `add_user_confirm`; add `/list_users` handler; add `/edit_user` conversation handler |
+| `app/telegram_bot.py` | Fix duplicate error in `add_user_confirm`; add `/list_users` handler; add `/edit_user` conversation handler; update `menu()` and `set_my_commands` |
