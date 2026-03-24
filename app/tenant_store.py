@@ -346,3 +346,85 @@ def get_restaurant_ids_by_names(
                 (dsn_id, names),
             )
             return [r["id"] for r in cur.fetchall()]
+
+
+def list_users(dsn_id: Optional[int] = None, db_dsn: str = DEFAULT_DB_DSN) -> List[Dict[str, Any]]:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            if dsn_id is not None:
+                cur.execute(
+                    """
+                    SELECT u.id, u.email, u.role, u.dsn_id,
+                           COALESCE(d.name, 'none') AS dsn_name
+                    FROM users u
+                    LEFT JOIN dsns d ON d.id = u.dsn_id
+                    WHERE u.dsn_id = %s
+                    ORDER BY u.email
+                    """,
+                    (dsn_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT u.id, u.email, u.role, u.dsn_id,
+                           COALESCE(d.name, 'none') AS dsn_name
+                    FROM users u
+                    LEFT JOIN dsns d ON d.id = u.dsn_id
+                    ORDER BY u.email
+                    """
+                )
+            users = cur.fetchall()
+
+        if not users:
+            return []
+
+        # Fetch all restaurant restrictions in one query, then group in Python
+        user_ids = [u["id"] for u in users]
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ur.user_id, r.name
+                FROM user_restaurants ur
+                JOIN restaurants r ON r.id = ur.restaurant_id
+                WHERE ur.user_id = ANY(%s)
+                ORDER BY ur.user_id, r.name
+                """,
+                (user_ids,),
+            )
+            rows = cur.fetchall()
+
+    restaurants_by_user: Dict[int, List[str]] = {uid: [] for uid in user_ids}
+    for row in rows:
+        restaurants_by_user[row["user_id"]].append(row["name"])
+
+    return [{**u, "restaurants": restaurants_by_user[u["id"]]} for u in users]
+
+
+def update_user_password(user_id: int, password_hash: str, db_dsn: str = DEFAULT_DB_DSN) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET password_hash = %s WHERE id = %s",
+                (password_hash, user_id),
+            )
+        conn.commit()
+
+
+def update_user_role(user_id: int, role: str, db_dsn: str = DEFAULT_DB_DSN) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET role = %s WHERE id = %s",
+                (role, user_id),
+            )
+        conn.commit()
+
+
+def update_user_dsn(user_id: int, dsn_id: Optional[int], db_dsn: str = DEFAULT_DB_DSN) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET dsn_id = %s WHERE id = %s",
+                (dsn_id, user_id),
+            )
+        conn.commit()
