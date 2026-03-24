@@ -308,7 +308,7 @@ async def restaurants_select(update: Update, context: ContextTypes.DEFAULT_TYPE)
     _set_selected_restaurants(update.effective_chat.id, user_id, selected)
     await update.message.reply_text(
         f"Selected restaurants: {', '.join(selected)}\n\n"
-        "You can now ask questions in English, for example:\n"
+        "You can now ask questions in English or Spanish, for example:\n"
         "\"What was the best selling product last week?\""
     )
     return ConversationHandler.END
@@ -367,14 +367,16 @@ async def add_user_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def add_user_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["new_password"] = (update.message.text or "").strip()
-    await update.message.reply_text("Role (admin, db_admin, user):")
+    await update.message.reply_text("Role:\n1. admin\n2. db_admin\n3. user")
     return ADD_USER_ROLE
 
 
 async def add_user_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    role = (update.message.text or "").strip()
-    if role not in ("admin", "db_admin", "user"):
-        await update.message.reply_text("Invalid role. Choose admin, db_admin, or user.")
+    _role_map = {"1": "admin", "2": "db_admin", "3": "user"}
+    text = (update.message.text or "").strip()
+    role = _role_map.get(text) or (text if text in _role_map.values() else None)
+    if not role:
+        await update.message.reply_text("Invalid choice. Reply with 1 (admin), 2 (db_admin), or 3 (user).")
         return ADD_USER_ROLE
     context.user_data["new_role"] = role
     admin_user_id = _session_user(update.effective_chat.id)
@@ -633,11 +635,12 @@ async def edit_user_email(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"Restaurants: {rest_names}"
     )
 
-    fields = "password / role / restaurants"
+    field_options = ["password", "role", "restaurants"]
     if editor.role == "superuser":
-        fields += " / dsn"
-
-    await update.message.reply_text(f"{info}\n\nWhat would you like to change? ({fields})")
+        field_options.append("dsn")
+    context.user_data["field_options"] = field_options
+    numbered = "\n".join(f"{i + 1}. {f}" for i, f in enumerate(field_options))
+    await update.message.reply_text(f"{info}\n\nWhat would you like to change?\n{numbered}")
     return EDIT_USER_FIELD
 
 
@@ -648,16 +651,18 @@ async def edit_user_field(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Session expired. Please /login again.")
         return ConversationHandler.END
     target = context.user_data["edit_target"]
-    field = (update.message.text or "").strip().lower()
+    field_options = context.user_data.get("field_options", ["password", "role", "restaurants"])
+    text = (update.message.text or "").strip()
 
-    allowed_fields = {"password", "role", "restaurants"}
-    if editor.role == "superuser":
-        allowed_fields.add("dsn")
+    # Accept number or field name
+    try:
+        field = field_options[int(text) - 1]
+    except (ValueError, IndexError):
+        field = text.lower()
 
-    if field not in allowed_fields:
-        await update.message.reply_text(
-            f"Invalid field. Choose: {' / '.join(sorted(allowed_fields))}"
-        )
+    if field not in field_options:
+        numbered = "\n".join(f"{i + 1}. {f}" for i, f in enumerate(field_options))
+        await update.message.reply_text(f"Invalid choice. Pick a number:\n{numbered}")
         return EDIT_USER_FIELD
 
     context.user_data["edit_field"] = field
@@ -667,9 +672,12 @@ async def edit_user_field(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     elif field == "role":
         if editor.role == "superuser":
-            await update.message.reply_text("New role (user / db_admin / admin / superuser):")
+            roles = ["user", "db_admin", "admin", "superuser"]
         else:
-            await update.message.reply_text("New role (user / db_admin):")
+            roles = ["user", "db_admin"]
+        context.user_data["role_options"] = roles
+        numbered = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(roles))
+        await update.message.reply_text(f"New role:\n{numbered}")
 
     elif field == "restaurants":
         if not target.dsn_id:
@@ -713,17 +721,17 @@ async def edit_user_value(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return EDIT_USER_CONFIRM
 
     elif field == "role":
-        allowed_roles = (
-            {"user", "db_admin", "admin", "superuser"}
-            if editor.role == "superuser"
-            else {"user", "db_admin"}
-        )
-        if text not in allowed_roles:
-            await update.message.reply_text(
-                f"Invalid role. Choose: {' / '.join(sorted(allowed_roles))}"
-            )
+        role_options = context.user_data.get("role_options", ["user", "db_admin"])
+        try:
+            role = role_options[int(text) - 1]
+        except (ValueError, IndexError):
+            role = text.lower()
+        if role not in role_options:
+            numbered = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(role_options))
+            await update.message.reply_text(f"Invalid choice. Pick a number:\n{numbered}")
             return EDIT_USER_VALUE
-        context.user_data["edit_value"] = text
+        context.user_data["edit_value"] = role
+        text = role  # use resolved role name in confirmation below
         await update.message.reply_text(
             f"Confirm: change {target.email}'s role to '{text}'? (yes/no)"
         )
