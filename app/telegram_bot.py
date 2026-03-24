@@ -587,7 +587,7 @@ async def list_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             restaurants = ", ".join(u["restaurants"]) if u["restaurants"] else "(all)"
             lines.append(
                 f"{u['email']} — {u['role']}\n"
-                f"DSN: {u['dsn_name']}\n"
+                f"DSN: {u['dsn_name'] or '(none)'}\n"
                 f"Restaurants: {restaurants}"
             )
         await update.message.reply_text("\n\n".join(lines))
@@ -606,6 +606,9 @@ async def edit_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def edit_user_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     editor_id = _session_user(update.effective_chat.id)
     editor = get_user_by_id(editor_id)
+    if not editor:
+        await update.message.reply_text("Session expired. Please /login again.")
+        return ConversationHandler.END
     email = (update.message.text or "").strip()
     target = get_user_by_email(email)
 
@@ -641,6 +644,9 @@ async def edit_user_email(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def edit_user_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     editor_id = _session_user(update.effective_chat.id)
     editor = get_user_by_id(editor_id)
+    if not editor:
+        await update.message.reply_text("Session expired. Please /login again.")
+        return ConversationHandler.END
     target = context.user_data["edit_target"]
     field = (update.message.text or "").strip().lower()
 
@@ -692,6 +698,9 @@ async def edit_user_field(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def edit_user_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     editor_id = _session_user(update.effective_chat.id)
     editor = get_user_by_id(editor_id)
+    if not editor:
+        await update.message.reply_text("Session expired. Please /login again.")
+        return ConversationHandler.END
     field = context.user_data["edit_field"]
     target = context.user_data["edit_target"]
     text = (update.message.text or "").strip()
@@ -735,11 +744,17 @@ async def edit_user_value(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         kept = [n for n in names if n in valid_map]
         ids = [valid_map[n] for n in kept]
 
+        if not kept:
+            names_list = "\n".join(r["name"] for r in available)
+            await update.message.reply_text(
+                f"None of the entered names were found. Enter restaurant names (comma-separated), or 'all' to remove restrictions:\n{names_list}"
+            )
+            return EDIT_USER_VALUE
+
         context.user_data["edit_value"] = ids
-        confirm_str = ", ".join(kept) if kept else "(none)"
         warning = f"\nWarning: not found and skipped: {', '.join(skipped)}" if skipped else ""
         await update.message.reply_text(
-            f"Confirm: restrict {target.email} to: {confirm_str}?{warning} (yes/no)"
+            f"Confirm: restrict {target.email} to: {', '.join(kept)}?{warning} (yes/no)"
         )
         return EDIT_USER_CONFIRM
 
