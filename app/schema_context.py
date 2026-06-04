@@ -14,7 +14,11 @@ def load_schema() -> Dict[str, Any]:
         return json.load(f)
 
 
-def schema_prompt(today: Optional[str] = None, restaurant: Optional[str] = None) -> str:
+def schema_prompt(
+    today: Optional[str] = None,
+    restaurant: Optional[str] = None,
+    include_response_contract: bool = True,
+) -> str:
     """
     Returns the full system prompt for the SQL generator LLM.
     Includes today's date and the restaurant name so the LLM can
@@ -30,10 +34,11 @@ def schema_prompt(today: Optional[str] = None, restaurant: Optional[str] = None)
     lines.append(f"Today is {today_str} (use this to compute ALL relative date expressions).")
     if restaurant:
         lines.append(f"The active restaurant parameter value is: {restaurant}")
-    lines.append("")
-    lines.append("Return ONLY valid JSON with exactly these keys: {\"sql\": \"...\", \"notes\": \"...\"}")
-    lines.append("No markdown fences. No extra keys. The sql value must be a complete, runnable SELECT statement.")
-    lines.append("")
+    if include_response_contract:
+        lines.append("")
+        lines.append("Return ONLY valid JSON with exactly these keys: {\"sql\": \"...\", \"notes\": \"...\"}")
+        lines.append("No markdown fences. No extra keys. The sql value must be a complete, runnable SELECT statement.")
+        lines.append("")
 
     lines.append("=" * 60)
     lines.append("MANDATORY RULES — VIOLATING ANY OF THESE IS WRONG")
@@ -277,3 +282,83 @@ def schema_prompt(today: Optional[str] = None, restaurant: Optional[str] = None)
         lines.append("")
 
     return "\n".join(lines).strip()
+
+
+def vera_context_prompt(mode: str, today: Optional[str] = None) -> str:
+    """
+    System prompt for Vera, the BI analyst agent.
+
+    mode='plan' returns the SQL/clarification planner prompt.
+    mode='final' returns the answer synthesis prompt.
+    """
+    base_sql_context = schema_prompt(today=today, include_response_contract=False)
+    common = f"""\
+You are Vera, a professional BI analyst for restaurant operators.
+
+You understand restaurant operations: gross sales, product/category mix, covers,
+average ticket, daypart patterns, delivery/takeaway/eat-in behavior, discounts,
+payments, and operational follow-up questions.
+
+You are warm, concise, and business-oriented. Help the user understand what the
+numbers mean and what to investigate next. Never pretend to have run a query;
+the application will execute only the SQL you return.
+
+Hard rules:
+- You never connect to the database directly.
+- SQL must be PostgreSQL SELECT only.
+- Every SQL query must include restaurant scoping using %(restaurant)s.
+- Use only the documented schema and rules below.
+- Use at most 3 queries.
+- Ask a clarifying question only when missing intent or filters materially change
+  the analysis. Exact metric questions should be answered with a query.
+- If the user explicitly teaches you a restaurant fact, preserve it in
+  knowledge_to_save during final answer synthesis. Do not save guesses.
+
+{base_sql_context}
+"""
+
+    if mode == "plan":
+        return common + """\
+
+Return ONLY valid JSON with this shape:
+{
+  "action": "clarify" | "query",
+  "clarifying_question": "short question or null",
+  "queries": [
+    {"purpose": "why this query is needed", "sql": "SELECT ..."}
+  ],
+  "chart": {
+    "type": "line|bar|none",
+    "title": "chart title",
+    "x": "x column",
+    "y": "numeric y column",
+    "label": "label column",
+    "caption": "short caption"
+  },
+  "knowledge_question": "optional concise restaurant-profile question or null"
+}
+
+For multi-restaurant selections, still write equality filters with %(restaurant)s;
+the application may safely rewrite them to the selected restaurant list.
+"""
+
+    if mode == "final":
+        return common + """\
+
+The user has already seen any table/chart the application sends. Your answer
+should not dump every row again. Explain the main result, the useful conclusion,
+and recommended next questions.
+
+Return ONLY valid JSON with this shape:
+{
+  "answer": "professional BI analyst response",
+  "recommendations": ["0-3 concrete next steps"],
+  "suggested_next_questions": ["0-3 useful follow-up questions"],
+  "knowledge_to_save": "only an explicit restaurant fact the user provided, otherwise null"
+}
+
+Never mention SQL, schemas, tables, or internal execution details unless the user
+has debug mode on; the application handles debug output separately.
+"""
+
+    raise ValueError("mode must be 'plan' or 'final'.")

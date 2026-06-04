@@ -164,7 +164,17 @@ def _bar_chart(rows: List[Dict], label_col: str, value_col: str) -> bytes:
 #  Public entry point
 # --------------------------------------------------------------------------- #
 
-def make_chart(rows: List[Dict[str, Any]], question: str = "") -> Optional[bytes]:
+def _spec_value(spec: Any, key: str) -> Optional[str]:
+    if not spec:
+        return None
+    if isinstance(spec, dict):
+        value = spec.get(key)
+    else:
+        value = getattr(spec, key, None)
+    return str(value) if value else None
+
+
+def make_chart(rows: List[Dict[str, Any]], question: str = "", chart_spec: Any = None) -> Optional[bytes]:
     """
     Decide whether the data warrants a chart and generate one.
     Returns PNG bytes, or None if no chart is appropriate.
@@ -173,6 +183,24 @@ def make_chart(rows: List[Dict[str, Any]], question: str = "") -> Optional[bytes
         return None  # Scalar or empty — no chart needed
 
     cols = list(rows[0].keys())
+    spec_type = (_spec_value(chart_spec, "type") or "").lower()
+    spec_x = _spec_value(chart_spec, "x")
+    spec_y = _spec_value(chart_spec, "y")
+    spec_label = _spec_value(chart_spec, "label")
+
+    if spec_type == "none":
+        return None
+
+    if spec_type and spec_type != "none" and spec_y in cols:
+        try:
+            if spec_type == "line" and spec_x in cols:
+                return _line_chart(rows, spec_x, spec_y)
+            if spec_type == "bar":
+                label_col = spec_label if spec_label in cols else spec_x
+                if label_col in cols:
+                    return _bar_chart(rows, label_col, spec_y)
+        except Exception:
+            return None
 
     date_col = _find_date_col(cols, rows)
     numeric_cols = _find_numeric_cols(cols, rows, exclude=[date_col] if date_col else [])

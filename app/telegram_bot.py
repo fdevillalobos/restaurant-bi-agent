@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import List, Optional, Tuple
+import html
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from psycopg.errors import UniqueViolation
@@ -22,12 +23,11 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
-from app.analyst import generate_answer, format_table, detect_language
+from app.analyst import detect_language
 from app.auth import hash_password, verify_password
-from app.charting import make_chart
-from app.db import run_select, DatabaseError
-from app.llm_planner import question_to_sql
+from app.db import DatabaseError
 from app.tenant_store import (
     init_db,
     get_user_by_email,
@@ -45,15 +45,21 @@ from app.tenant_store import (
     set_user_restaurants,
     set_session_language,
     set_session_include_sql,
-    get_conversation_history,
     append_conversation,
     clear_conversation_history,
+    get_user_conversation_memory,
+    append_user_conversation_memory,
+    clear_user_conversation_memory,
+    get_restaurant_knowledge,
+    upsert_restaurant_knowledge,
+    export_restaurant_knowledge_markdown,
     list_users,
     list_user_restaurants,
     update_user_password,
     update_user_role,
     update_user_dsn,
 )
+from app.vera import answer_with_vera
 
 
 LOGIN_EMAIL, LOGIN_PASSWORD = range(2)
@@ -108,20 +114,6 @@ def _set_selected_restaurants(chat_id: int, user_id: int, restaurants: List[str]
 
 def _parse_csv(text: str) -> List[str]:
     return [t.strip() for t in (text or "").split(",") if t.strip()]
-
-
-def _apply_restaurant_scope(sql: str, restaurants: List[str]) -> Tuple[str, dict]:
-    if not restaurants:
-        return sql, {}
-    if len(restaurants) == 1:
-        return sql, {"restaurant": restaurants[0]}
-
-    # Try to replace common equality filter with ANY for multiple restaurants
-    updated = sql
-    updated = updated.replace("= %(restaurant)s", "= ANY(%(restaurants)s)")
-    updated = updated.replace("= LOWER(%(restaurant)s)", "= ANY(%(restaurants)s)")
-    params = {"restaurants": restaurants}
-    return updated, params
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -477,6 +469,9 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _session_user(chat_id):
         await update.message.reply_text("You are not logged in.")
         return
+    user = get_user_by_id(_session_user(chat_id))
+    if user and user.dsn_id:
+        clear_user_conversation_memory(user.id, user.dsn_id)
     clear_conversation_history(chat_id)
     await update.message.reply_text("Conversation history cleared. Starting fresh.")
 
@@ -505,10 +500,41 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     question = update.message.text or ""
     language = detect_language(question)
-    history = get_conversation_history(chat_id)
+    history = get_user_conversation_memory(user.id, user.dsn_id)
+    restaurant_knowledge = get_restaurant_knowledge(user.dsn_id, restaurants)
+    logger.info(
+        "Vera request user_id=%s dsn_id=%s restaurants=%s history_messages=%s",
+        user.id,
+        user.dsn_id,
+        len(restaurants),
+        len(history),
+    )
 
     try:
-        plan = question_to_sql(question, restaurant=restaurants[0], history=history)
+        vera = answer_with_vera(
+            question,
+            restaurants=restaurants,
+            dsn=dsn["dsn"],
+            history=history,
+            restaurant_knowledge=restaurant_knowledge,
+            language=language,
+            preview=True,
+        )
+        logger.info(
+            "Vera response action=%s rows=%s chart=%s queries=%s",
+            vera.action,
+            len(vera.rows),
+            bool(vera.chart_bytes),
+            len(vera.executed_queries),
+        )
+    except DatabaseError as e:
+        msg = "Query failed. Please try again or contact support."
+        if language == "es":
+            msg = "La consulta falló. Intenta de nuevo o contacta soporte."
+        if _session_include_sql(chat_id):
+            msg = f"{msg}\n\nError: {e}"
+        await update.message.reply_text(msg)
+        return
     except Exception as e:
         msg = f"Could not generate a query: {e}"
         if language == "es":
@@ -516,55 +542,34 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(msg)
         return
 
-    sql, params = _apply_restaurant_scope(plan.sql, restaurants)
-    if "restaurant" not in params and "restaurants" not in params:
-        params = {"restaurant": restaurants[0]}
-
-    try:
-        rows = run_select(
-            sql,
-            params=params,
-            preview=True,
-            statement_timeout_ms=int(os.getenv("STATEMENT_TIMEOUT_MS_ASK", "30000")),
-            dsn=dsn["dsn"],
+    if vera.table:
+        await update.message.reply_text(
+            f"<pre>{html.escape(vera.table)}</pre>", parse_mode="HTML"
         )
 
-        table = format_table(rows)
-        insight = generate_answer(question, rows, language=language, history=history)
+    reply = vera.message
+    if _session_include_sql(chat_id):
+        reply = f"{html.escape(reply)}\n\nSQL:\n<pre>{html.escape(vera.sql or '')}</pre>"
+        await update.message.reply_text(reply, parse_mode="HTML")
+    else:
+        await update.message.reply_text(reply)
 
-        if table:
-            await update.message.reply_text(
-                f"<pre>{table}</pre>", parse_mode="HTML"
-            )
+    if vera.chart_bytes:
+        import io
+        logger.info("Sending Vera chart caption=%s", vera.chart_caption or "Chart")
+        await update.message.reply_photo(
+            photo=io.BytesIO(vera.chart_bytes),
+            caption=vera.chart_caption or "Chart",
+        )
 
-        reply = insight
-        if _session_include_sql(chat_id):
-            reply = f"{reply}\n\nSQL:\n<pre>{sql}</pre>"
-            await update.message.reply_text(reply, parse_mode="HTML")
-        else:
-            await update.message.reply_text(reply)
+    if vera.knowledge_to_save:
+        for restaurant in restaurants:
+            upsert_restaurant_knowledge(user.dsn_id, restaurant, vera.knowledge_to_save)
+            updated = get_restaurant_knowledge(user.dsn_id, [restaurant]).get(restaurant, vera.knowledge_to_save)
+            export_restaurant_knowledge_markdown(dsn["name"], user.dsn_id, restaurant, updated)
 
-        answer = f"{table}\n\n{insight}" if table else insight
-
-        # Send chart if the data warrants one
-        chart_bytes = make_chart(rows, question)
-        if chart_bytes:
-            import io
-            await update.message.reply_photo(
-                photo=io.BytesIO(chart_bytes),
-                caption="Chart",
-            )
-
-        # Persist the exchange to conversation history
-        append_conversation(chat_id, question, answer)
-
-    except DatabaseError as e:
-        msg = "Query failed. Please try again or contact support."
-        if language == "es":
-            msg = "La consulta falló. Intenta de nuevo o contacta soporte."
-        if _session_include_sql(chat_id):
-            msg = f"{msg}\n\nError: {e}\n\nSQL:\n```\n{sql}\n```"
-        await update.message.reply_text(msg)
+    append_user_conversation_memory(user.id, user.dsn_id, question, vera.message)
+    append_conversation(chat_id, question, vera.message)
 
 
 async def list_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

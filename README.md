@@ -1,6 +1,8 @@
 # Restaurant BI Agent
 
-Natural-language analytics bot for Fudo POS restaurants. Ask questions in plain English or Spanish and get answers, tables, and charts — delivered via Telegram.
+Natural-language analytics bot for Fudo POS restaurants. Ask questions in plain English or Spanish and get answers, tables, charts, and analyst-style recommendations — delivered via Telegram.
+
+The analyst is Vera: a BI analyst persona that can plan multiple safe SQL queries, cross-reference results, explain what the numbers mean, recommend what to investigate next, and remember the last 30 exchanges per user/client database.
 
 ---
 
@@ -26,9 +28,9 @@ Compare takeaway vs eat-in sales this week
 ¿Cuáles fueron las ventas brutas la semana pasada?
 ```
 
-The bot will reply with a written answer, a data table (for multi-row results), and a chart when relevant.
+Vera will reply with a written answer, a data table (for multi-row results), and a chart when relevant. For broader questions, she may ask a follow-up question before querying if the business goal or filters are unclear.
 
-The bot remembers the last 10 exchanges in a conversation — you can ask follow-up questions and it will understand the context. Use `/reset` to start fresh.
+The bot remembers the last 30 exchanges for your user and selected client database — you can ask follow-up questions and it will understand the context. Use `/reset` to start fresh.
 
 ---
 
@@ -135,11 +137,34 @@ OPENAI_MODEL=gpt-4o-mini
 TELEGRAM_BOT_TOKEN=123456:ABC-...
 ```
 
+By default, Vera uses OpenRouter:
+
+```bash
+LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=sk-or-...
+OPENROUTER_MODEL=deepseek/deepseek-v4-flash
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+To use OpenAI instead, set:
+
+```bash
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
+```
+
 ### 5. Initialize the control DB and create a superuser
 
 ```bash
 .venv/bin/python -m app.admin_cli init-db
 .venv/bin/python -m app.admin_cli create-superuser --email you@example.com --password "yourpassword"
+```
+
+Test the configured LLM provider without touching restaurant data:
+
+```bash
+.venv/bin/python -m app.admin_cli test-openrouter
 ```
 
 ### 6. Run the bot
@@ -185,8 +210,12 @@ Set these on the Railway bot service (see `.env.example` for all options):
 | Variable | Description |
 |---|---|
 | `CONTROL_DB_DSN` | Postgres DSN for the control DB — use `${{Postgres.DATABASE_URL}}` to reference the Railway Postgres service |
-| `OPENAI_API_KEY` | OpenAI API key |
-| `OPENAI_MODEL` | Model to use, e.g. `gpt-4o-mini` |
+| `LLM_PROVIDER` | `openrouter` by default, or `openai` |
+| `OPENROUTER_API_KEY` | OpenRouter API key |
+| `OPENROUTER_MODEL` | Model to use, e.g. `deepseek/deepseek-v4-flash` |
+| `OPENROUTER_BASE_URL` | Optional, defaults to `https://openrouter.ai/api/v1` |
+| `OPENAI_API_KEY` | OpenAI API key if `LLM_PROVIDER=openai` |
+| `OPENAI_MODEL` | OpenAI model if `LLM_PROVIDER=openai`, e.g. `gpt-4o-mini` |
 | `TELEGRAM_BOT_TOKEN` | Bot token from BotFather |
 
 > `DATABASE_DSN` (Fudo POS) is **not** set here — it's registered per-client via `/add_dsn` inside Telegram.
@@ -204,6 +233,8 @@ CONTROL_DB_DSN="<DATABASE_PUBLIC_URL>" .venv/bin/python -m app.admin_cli create-
 ```
 
 `init-db` is idempotent — safe to re-run after a DB reset.
+
+`init-db` also creates Vera's durable memory and restaurant-knowledge tables. Runtime markdown exports of restaurant knowledge are written under `runtime/vera_knowledge/` and are intentionally gitignored.
 
 ### After deploy
 

@@ -187,9 +187,7 @@ def generate_answer(
             "The period may have no sales, or the filters don't match any records."
         )
 
-    from openai import OpenAI
-    client = OpenAI()
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    from app.llm_client import chat_completion
 
     multi_row = len(rows) > 1
 
@@ -210,8 +208,7 @@ def generate_answer(
         messages.extend(history[-6:])
     messages.append({"role": "user", "content": user_content})
 
-    resp = client.chat.completions.create(
-        model=model,
+    resp = chat_completion(
         messages=messages,
         temperature=0.3,
     )

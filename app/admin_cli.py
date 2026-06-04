@@ -6,6 +6,7 @@ import os
 from dotenv import load_dotenv
 
 from app.auth import hash_password
+from app.llm_client import smoke_test
 from app.tenant_store import init_db, create_user, get_user_by_email
 
 
@@ -19,6 +20,8 @@ def main() -> int:
     su_cmd = sub.add_parser("create-superuser", help="Create a superuser account")
     su_cmd.add_argument("--email", required=True)
     su_cmd.add_argument("--password", required=True)
+
+    sub.add_parser("test-openrouter", help="Test the configured LLM provider connection")
 
     args = parser.parse_args()
 
@@ -36,6 +39,13 @@ def main() -> int:
         pwd_hash = hash_password(args.password)
         create_user(args.email, pwd_hash, role="superuser", dsn_id=None)
         print("Superuser created.")
+        return 0
+
+    if args.cmd == "test-openrouter":
+        result = smoke_test()
+        print(f"Provider: {result['provider']}")
+        print(f"Model: {result['model']}")
+        print(f"Status: {result['status']}")
         return 0
 
     return 1

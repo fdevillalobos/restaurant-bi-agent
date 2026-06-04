@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import date
 from typing import Optional
 
-from openai import OpenAI
 from pydantic import BaseModel
 
+from app.llm_client import chat_completion
 from app.schema_context import schema_prompt
 from app.sql_safety import validate_select_only, UnsafeSQL
 
@@ -43,8 +42,6 @@ def question_to_sql(
     Returns:
         SQLPlan with .sql (safe, ready to execute) and .notes.
     """
-    client = OpenAI()
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     today = date.today().isoformat()
 
     system = schema_prompt(today=today, restaurant=restaurant)
@@ -55,8 +52,7 @@ def question_to_sql(
         messages.extend(history[-10:])
     messages.append({"role": "user", "content": question})
 
-    resp = client.chat.completions.create(
-        model=model,
+    resp = chat_completion(
         messages=messages,
         response_format={"type": "json_object"},
         temperature=0.0,

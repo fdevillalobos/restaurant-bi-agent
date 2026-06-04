@@ -4,13 +4,13 @@ import argparse
 import json
 import os
 import sys
+from typing import Optional
 
 from dotenv import load_dotenv
 
-from app.analyst import generate_answer, format_table, detect_language
-from app.charting import make_chart
-from app.db import run_select, DatabaseError
-from app.llm_planner import question_to_sql
+from app.analyst import detect_language
+from app.db import DatabaseError
+from app.vera import answer_with_vera, MAX_MEMORY_EXCHANGES, VeraResponse
 
 
 def _default_restaurant() -> str:
@@ -24,42 +24,35 @@ def _ask(
     include_sql: bool,
     language: str,
     history: list[dict],
-) -> tuple[str | None, list]:
+) -> tuple[VeraResponse | None, list]:
     """
     Run one question through the full pipeline.
     Returns (answer_text | None, rows).
     """
     try:
-        plan = question_to_sql(question, restaurant=restaurant, history=history)
-    except Exception as e:
-        print(f"[planner error] {e}", file=sys.stderr)
-        return None, []
-
-    if include_sql:
-        print(f"\n--- SQL ---\n{plan.sql}\n----------\n")
-
-    try:
-        rows = run_select(
-            plan.sql,
-            params={"restaurant": restaurant},
+        response = answer_with_vera(
+            question,
+            restaurants=[restaurant],
+            dsn=None,
+            history=history,
+            restaurant_knowledge={},
+            language=language,
             preview=preview,
-            statement_timeout_ms=int(os.getenv("STATEMENT_TIMEOUT_MS_ASK", "30000")),
         )
     except DatabaseError as e:
         print(f"[database error] {e}", file=sys.stderr)
-        if include_sql:
-            print(f"SQL was:\n{plan.sql}")
+        return None, []
+    except Exception as e:
+        print(f"[vera error] {e}", file=sys.stderr)
         return None, []
 
-    table = format_table(rows)
-    insight = generate_answer(question, rows, language=language, history=history)
-    answer = f"{table}\n\n{insight}" if table else insight
-    return answer, rows
+    if include_sql and response.sql:
+        print(f"\n--- SQL ---\n{response.sql}\n----------\n")
+    return response, response.rows
 
 
-def _show_chart(rows: list, question: str) -> None:
+def _show_chart(chart_bytes: Optional[bytes]) -> None:
     """Generate a chart from rows and open it if on macOS."""
-    chart_bytes = make_chart(rows, question)
     if not chart_bytes:
         return
     path = "/tmp/bi_chart.png"
@@ -90,21 +83,23 @@ def _chat_mode(restaurant: str, include_sql: bool, language: str, show_charts: b
         if question.lower() in ("exit", "quit", "q", "bye"):
             break
 
-        answer, rows = _ask(
+        response, rows = _ask(
             question, restaurant,
             preview=True,
             include_sql=include_sql,
             language=language or detect_language(question),
             history=history,
         )
-        if answer:
-            print(f"\nAnalyst: {answer}\n")
+        if response:
+            if response.table:
+                print(f"\n{response.table}")
+            print(f"\nVera: {response.message}\n")
             if show_charts:
-                _show_chart(rows, question)
+                _show_chart(response.chart_bytes)
             history.append({"role": "user", "content": question})
-            history.append({"role": "assistant", "content": answer})
-            if len(history) > 20:
-                history = history[-20:]
+            history.append({"role": "assistant", "content": response.message})
+            if len(history) > MAX_MEMORY_EXCHANGES * 2:
+                history = history[-MAX_MEMORY_EXCHANGES * 2:]
 
     return 0
 
@@ -133,20 +128,23 @@ def main() -> int:
         )
 
     lang = args.language or detect_language(args.question)
-    answer, rows = _ask(
+    response, rows = _ask(
         args.question, restaurant,
         preview=not args.no_preview,
         include_sql=args.include_sql,
         language=lang,
         history=[],
     )
-    if answer is None:
+    if response is None:
         return 1
 
-    print(answer)
+    if response.table:
+        print(response.table)
+        print()
+    print(response.message)
 
     if args.chart:
-        _show_chart(rows, args.question)
+        _show_chart(response.chart_bytes)
 
     if args.include_data:
         print("\nRows:")

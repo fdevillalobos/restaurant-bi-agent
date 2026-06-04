@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 import psycopg
@@ -22,7 +25,8 @@ class User:
 
 
 def _connect(db_dsn: str = DEFAULT_DB_DSN) -> psycopg.Connection:
-    return psycopg.connect(db_dsn, row_factory=dict_row)
+    dsn = db_dsn or os.getenv("CONTROL_DB_DSN", "")
+    return psycopg.connect(dsn, row_factory=dict_row)
 
 
 def init_db(db_dsn: str = DEFAULT_DB_DSN) -> None:
@@ -76,6 +80,28 @@ def init_db(db_dsn: str = DEFAULT_DB_DSN) -> None:
                     language TEXT,
                     include_sql BOOLEAN,
                     conversation_history TEXT
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_conversation_memories (
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    dsn_id INTEGER NOT NULL REFERENCES dsns(id),
+                    conversation_history TEXT,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (user_id, dsn_id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS restaurant_knowledge (
+                    dsn_id INTEGER NOT NULL REFERENCES dsns(id),
+                    restaurant_name TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (dsn_id, restaurant_name)
                 );
                 """
             )
@@ -332,6 +358,169 @@ def clear_conversation_history(chat_id: int, db_dsn: str = DEFAULT_DB_DSN) -> No
                 (chat_id,),
             )
         conn.commit()
+
+
+_MAX_VERA_MEMORY_MESSAGES = 60  # 30 exchanges
+_MAX_MEMORY_CONTENT_CHARS = 4000
+
+
+def _trim_memory_content(content: str, max_chars: int = _MAX_MEMORY_CONTENT_CHARS) -> str:
+    text = str(content or "")
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
+
+
+def trim_conversation_messages(
+    history: List[Dict[str, Any]],
+    max_messages: int = _MAX_VERA_MEMORY_MESSAGES,
+) -> List[Dict[str, str]]:
+    trimmed: List[Dict[str, str]] = []
+    for msg in history[-max_messages:]:
+        role = str(msg.get("role") or "assistant")
+        if role not in ("user", "assistant"):
+            role = "assistant"
+        trimmed.append({"role": role, "content": _trim_memory_content(msg.get("content", ""))})
+    return trimmed
+
+
+def get_user_conversation_memory(
+    user_id: int,
+    dsn_id: int,
+    db_dsn: str = DEFAULT_DB_DSN,
+) -> List[Dict[str, Any]]:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT conversation_history
+                FROM user_conversation_memories
+                WHERE user_id = %s AND dsn_id = %s
+                """,
+                (user_id, dsn_id),
+            )
+            row = cur.fetchone()
+    if not row or not row.get("conversation_history"):
+        return []
+    try:
+        return json.loads(row["conversation_history"])
+    except Exception:
+        return []
+
+
+def append_user_conversation_memory(
+    user_id: int,
+    dsn_id: int,
+    user_message: str,
+    assistant_message: str,
+    db_dsn: str = DEFAULT_DB_DSN,
+) -> None:
+    history = get_user_conversation_memory(user_id, dsn_id, db_dsn=db_dsn)
+    history.append({"role": "user", "content": user_message})
+    history.append({"role": "assistant", "content": assistant_message})
+    history = trim_conversation_messages(history)
+    raw = json.dumps(history)
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO user_conversation_memories (user_id, dsn_id, conversation_history, updated_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (user_id, dsn_id) DO UPDATE
+                SET conversation_history = EXCLUDED.conversation_history,
+                    updated_at = NOW()
+                """,
+                (user_id, dsn_id, raw),
+            )
+        conn.commit()
+
+
+def clear_user_conversation_memory(
+    user_id: int,
+    dsn_id: int,
+    db_dsn: str = DEFAULT_DB_DSN,
+) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM user_conversation_memories WHERE user_id = %s AND dsn_id = %s",
+                (user_id, dsn_id),
+            )
+        conn.commit()
+
+
+def get_restaurant_knowledge(
+    dsn_id: int,
+    restaurant_names: List[str],
+    db_dsn: str = DEFAULT_DB_DSN,
+) -> Dict[str, str]:
+    if not restaurant_names:
+        return {}
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT restaurant_name, content
+                FROM restaurant_knowledge
+                WHERE dsn_id = %s AND restaurant_name = ANY(%s)
+                ORDER BY restaurant_name
+                """,
+                (dsn_id, restaurant_names),
+            )
+            rows = cur.fetchall()
+    return {row["restaurant_name"]: row["content"] for row in rows}
+
+
+def upsert_restaurant_knowledge(
+    dsn_id: int,
+    restaurant_name: str,
+    content: str,
+    db_dsn: str = DEFAULT_DB_DSN,
+) -> None:
+    content = _trim_memory_content(content, max_chars=12000)
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO restaurant_knowledge (dsn_id, restaurant_name, content, updated_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (dsn_id, restaurant_name) DO UPDATE
+                SET content = CASE
+                        WHEN restaurant_knowledge.content = '' THEN EXCLUDED.content
+                        ELSE restaurant_knowledge.content || E'\n\n' || EXCLUDED.content
+                    END,
+                    updated_at = NOW()
+                """,
+                (dsn_id, restaurant_name, content),
+            )
+        conn.commit()
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", value.strip().lower()).strip("-")
+    return slug or "unknown"
+
+
+def export_restaurant_knowledge_markdown(
+    dsn_name: str,
+    dsn_id: int,
+    restaurant_name: str,
+    content: str,
+    base_dir: str = "runtime/vera_knowledge",
+) -> Path:
+    root = Path(base_dir)
+    path = root / _slug(dsn_name) / f"{_slug(restaurant_name)}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    body = (
+        f"# {restaurant_name}\n\n"
+        f"DSN: {dsn_name} ({dsn_id})\n"
+        f"Updated: {now}\n\n"
+        "## Vera Knowledge\n\n"
+        f"{content.strip()}\n"
+    )
+    path.write_text(body, encoding="utf-8")
+    return path
 
 
 def get_restaurant_ids_by_names(
