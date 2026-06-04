@@ -1,6 +1,6 @@
 # Restaurant BI Agent
 
-Natural-language analytics bot for Fudo POS restaurants. Ask questions in plain English or Spanish and get answers, tables, charts, and analyst-style recommendations — delivered via Telegram.
+Natural-language analytics bot for Fudo POS restaurants. Ask questions in plain English or Spanish and get answers, tables, charts, and analyst-style recommendations — delivered through Telegram, CLI, or Vera's web chat workspace.
 
 The analyst is Vera: a BI analyst persona that can plan multiple safe SQL queries, cross-reference results, explain what the numbers mean, recommend what to investigate next, and remember the last 30 exchanges per user/client database.
 
@@ -31,6 +31,62 @@ Compare takeaway vs eat-in sales this week
 Vera will reply with a written answer, a data table (for multi-row results), and a chart when relevant. For broader questions, she may ask a follow-up question before querying if the business goal or filters are unclear.
 
 The bot remembers the last 30 exchanges for your user and selected client database — you can ask follow-up questions and it will understand the context. Use `/reset` to start fresh.
+
+---
+
+## Using the Web Interface
+
+The web interface is a React/Vite app served by FastAPI. It gives Vera a richer analyst workspace with assistant-ui chat primitives, interactive ECharts charts, sortable tables, suggested follow-up questions, and debug query metadata.
+
+assistant-ui is used as a frontend React dependency inside `web/`; it is not a Codex skill or a separate backend. Vera's backend still owns auth, restaurant scope, memory, SQL safety, query execution, and structured BI payloads.
+
+### Run locally
+
+```bash
+# Backend/API
+.venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+# Frontend dev server
+cd web
+npm install
+npm run dev
+```
+
+Open the Vite URL, log in with an existing control DB user, select restaurant(s), and ask Vera a question.
+
+For a production-like local build:
+
+```bash
+cd web
+npm run build
+cd ..
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Then open `http://127.0.0.1:8000`.
+
+### Web API
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/login` | Log in with existing user email/password |
+| `POST /api/logout` | Clear the web session |
+| `GET /api/me` | Return user, DSN, accessible restaurants, selected restaurants |
+| `POST /api/restaurants/select` | Save selected restaurants in signed cookie session |
+| `POST /api/chat` | Ask Vera and receive structured text/table/chart/debug payload |
+| `GET /api/chat/history` | Load the persisted web transcript for the current user + DSN |
+| `POST /api/memory/reset` | Clear conversation memory and web transcript |
+
+Vera does not return raw HTML. The API returns structured JSON and the frontend renders safe known components.
+
+The production UI is built from:
+
+- assistant-ui external-store runtime for the thread and composer
+- shadcn-style Radix/Tailwind components for controls, sheets, tabs, badges, and workspace layout
+- ECharts for interactive BI charts
+- custom Vera blocks for markdown, KPI cards, charts, tables, recommendations, and debug/error states
+
+Architecture details are in [`docs/web-interface-architecture.md`](docs/web-interface-architecture.md).
 
 ---
 
@@ -135,6 +191,7 @@ CONTROL_DB_DSN=postgresql://localhost/restaurant_bi_control
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
 TELEGRAM_BOT_TOKEN=123456:ABC-...
+WEB_SESSION_SECRET=replace-with-a-long-random-string
 ```
 
 By default, Vera uses OpenRouter:
@@ -174,6 +231,12 @@ Test the configured LLM provider without touching restaurant data:
 ```
 
 Open Telegram → `/login` → `/add_dsn` to register your Fudo connection → `/restaurants` → start asking questions.
+
+For Railway, Telegram should use FastAPI webhook mode rather than polling:
+
+```bash
+.venv/bin/python -m app.admin_cli set-telegram-webhook --url https://YOUR_DOMAIN/telegram/webhook
+```
 
 ### Other useful commands
 
@@ -217,8 +280,13 @@ Set these on the Railway bot service (see `.env.example` for all options):
 | `OPENAI_API_KEY` | OpenAI API key if `LLM_PROVIDER=openai` |
 | `OPENAI_MODEL` | OpenAI model if `LLM_PROVIDER=openai`, e.g. `gpt-4o-mini` |
 | `TELEGRAM_BOT_TOKEN` | Bot token from BotFather |
+| `WEB_SESSION_SECRET` | Required in production. Long random string used to sign web session cookies |
+| `PUBLIC_BASE_URL` | Optional public URL used when documenting or setting webhook |
+| `WEB_COOKIE_SECURE` | Set to `true` in production so cookies are HTTPS-only |
 
 > `DATABASE_DSN` (Fudo POS) is **not** set here — it's registered per-client via `/add_dsn` inside Telegram.
+
+The app refuses to boot in Railway/production if `WEB_SESSION_SECRET` is missing or left as the development default.
 
 ### First-time DB setup
 
@@ -238,11 +306,18 @@ CONTROL_DB_DSN="<DATABASE_PUBLIC_URL>" .venv/bin/python -m app.admin_cli create-
 
 ### After deploy
 
-1. Open Telegram → `/login` with the superuser credentials
-2. `/add_dsn` → register your Fudo Postgres connection string
-3. `/restaurants` → confirm restaurants synced
-4. Start asking questions
+1. Open the Railway public web URL and log in with the superuser credentials
+2. Open Telegram → `/login` with the same credentials
+3. `/add_dsn` → register your Fudo Postgres connection string
+4. `/restaurants` → confirm restaurants synced
+5. Configure the Telegram webhook:
 
-### Restarting the bot
+```bash
+PUBLIC_BASE_URL="https://YOUR_DOMAIN" .venv/bin/python -m app.admin_cli set-telegram-webhook --url https://YOUR_DOMAIN/telegram/webhook
+```
 
-Railway → bot service → **Deployments** tab → three dots on latest deployment → **Redeploy**.
+6. Ask Vera from the web workspace and Telegram
+
+### Restarting the service
+
+Railway → web service → **Deployments** tab → three dots on latest deployment → **Redeploy**.

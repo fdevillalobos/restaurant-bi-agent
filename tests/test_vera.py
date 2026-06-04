@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from app.sql_safety import UnsafeSQL
-from app.vera import MAX_VERA_QUERIES, plan_with_vera
+from app.vera import MAX_VERA_QUERIES, normalize_postgres_sql, plan_with_vera
 from app import vera as vera_module
 
 
@@ -110,6 +110,12 @@ class VeraPlanTests(unittest.TestCase):
         self.assertIn("ANY(%(restaurants)s)", sql)
         self.assertEqual(params["restaurants"], ["A", "B"])
         self.assertEqual(params["restaurant"], "A")
+
+    def test_round_with_scale_casts_expression_to_numeric(self):
+        sql = "SELECT ROUND(((COALESCE(a.total, 0) - COALESCE(b.total, 0)) / NULLIF(b.total, 0)) * 100, 2) AS pct"
+        normalized = normalize_postgres_sql(sql)
+        self.assertIn(")::numeric, 2)", normalized)
+        self.assertIn("ROUND((", normalized)
 
 
 if __name__ == "__main__":

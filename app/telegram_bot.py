@@ -851,12 +851,11 @@ def build_app():
 
     app = ApplicationBuilder().token(_token()).post_init(post_init).build()
     app.add_error_handler(handle_error)
+    configure_app(app)
     return app
 
 
-def main() -> None:
-    app = build_app()
-
+def configure_app(app) -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("whoami", whoami))
@@ -924,6 +923,9 @@ def main() -> None:
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question))
 
+
+def main() -> None:
+    app = build_app()
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 

@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field as PydanticField
 
 from app.analyst import detect_language, format_table
 from app.charting import make_chart
-from app.db import run_select
+from app.db import DatabaseError, run_select
 from app.llm_client import chat_completion
 from app.schema_context import vera_context_prompt
 from app.sql_safety import validate_select_only, UnsafeSQL
@@ -37,15 +37,15 @@ class VeraChartSpec(BaseModel):
 class VeraPlan(BaseModel):
     action: Literal["clarify", "query"]
     clarifying_question: Optional[str] = None
-    queries: List[VeraQuery] = Field(default_factory=list)
+    queries: List[VeraQuery] = PydanticField(default_factory=list)
     chart: Optional[VeraChartSpec] = None
     knowledge_question: Optional[str] = None
 
 
 class VeraFinal(BaseModel):
     answer: str
-    recommendations: List[str] = Field(default_factory=list)
-    suggested_next_questions: List[str] = Field(default_factory=list)
+    recommendations: List[str] = PydanticField(default_factory=list)
+    suggested_next_questions: List[str] = PydanticField(default_factory=list)
     knowledge_to_save: Optional[str] = None
 
 
@@ -55,6 +55,14 @@ class QueryResult:
     sql: str
     rows: List[Dict[str, Any]]
     table: str
+
+
+class VeraQueryExecutionError(DatabaseError):
+    def __init__(self, message: str, *, purpose: str, sql: str, params: Dict[str, Any]):
+        super().__init__(message)
+        self.purpose = purpose
+        self.sql = sql
+        self.params = params
 
 
 @dataclass
@@ -68,6 +76,9 @@ class VeraResponse:
     sql: Optional[str]
     executed_queries: List[QueryResult]
     knowledge_to_save: Optional[str] = None
+    recommendations: List[str] = field(default_factory=list)
+    suggested_next_questions: List[str] = field(default_factory=list)
+    chart_spec: Optional[VeraChartSpec] = None
 
 
 def _json_loads(content: str) -> dict[str, Any]:
@@ -156,6 +167,59 @@ def _require_restaurant_scope(sql: str) -> None:
         raise UnsafeSQL("SQL must include %(restaurant)s or %(restaurants)s for restaurant scoping.")
 
 
+def normalize_postgres_sql(sql: str) -> str:
+    """
+    Normalize common LLM-produced PostgreSQL sharp edges.
+
+    PostgreSQL only supports ROUND(double precision) with one argument. The
+    two-argument form requires numeric, so ROUND(float_expr, 2) must cast the
+    first argument.
+    """
+    out: list[str] = []
+    i = 0
+    upper = sql.upper()
+    while i < len(sql):
+        if not upper.startswith("ROUND(", i):
+            out.append(sql[i])
+            i += 1
+            continue
+
+        start = i + len("ROUND(")
+        depth = 1
+        j = start
+        split_at: Optional[int] = None
+        in_single_quote = False
+        while j < len(sql) and depth > 0:
+            ch = sql[j]
+            if ch == "'" and (j == 0 or sql[j - 1] != "\\"):
+                in_single_quote = not in_single_quote
+            elif not in_single_quote:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                elif ch == "," and depth == 1 and split_at is None:
+                    split_at = j
+            j += 1
+
+        if depth != 0 or split_at is None:
+            out.append(sql[i])
+            i += 1
+            continue
+
+        expr = sql[start:split_at].strip()
+        scale = sql[split_at + 1:j].strip()
+        if re.fullmatch(r"\d+", scale) and "::numeric" not in expr.lower():
+            out.append(f"ROUND(({expr})::numeric, {scale})")
+        else:
+            out.append(sql[i:j + 1])
+        i = j + 1
+
+    return "".join(out)
+
+
 def _apply_restaurant_scope(sql: str, restaurants: List[str]) -> tuple[str, dict]:
     if not restaurants:
         return sql, {}
@@ -191,6 +255,7 @@ def plan_with_vera(
         if not plan.queries:
             raise ValueError("Vera returned query action without queries.")
         for q in plan.queries:
+            q.sql = normalize_postgres_sql(q.sql)
             validate_select_only(q.sql)
             _require_restaurant_scope(q.sql)
     elif not plan.clarifying_question:
@@ -256,13 +321,16 @@ def answer_with_vera(
     executed: List[QueryResult] = []
     for query in plan.queries[:MAX_VERA_QUERIES]:
         sql, params = _apply_restaurant_scope(query.sql, restaurants)
-        rows = run_select(
-            sql,
-            params=params,
-            preview=preview,
-            statement_timeout_ms=int(os.getenv("STATEMENT_TIMEOUT_MS_ASK", "30000")),
-            dsn=dsn,
-        )
+        try:
+            rows = run_select(
+                sql,
+                params=params,
+                preview=preview,
+                statement_timeout_ms=int(os.getenv("STATEMENT_TIMEOUT_MS_ASK", "30000")),
+                dsn=dsn,
+            )
+        except DatabaseError as exc:
+            raise VeraQueryExecutionError(str(exc), purpose=query.purpose, sql=sql, params=params) from exc
         executed.append(QueryResult(query.purpose, sql, rows, format_table(rows)))
 
     final = final_with_vera(
@@ -290,7 +358,62 @@ def answer_with_vera(
         sql="\n\n".join(r.sql for r in executed if r.sql),
         executed_queries=executed,
         knowledge_to_save=final.knowledge_to_save,
+        recommendations=final.recommendations,
+        suggested_next_questions=final.suggested_next_questions,
+        chart_spec=plan.chart,
     )
+
+
+def response_to_web_payload(response: VeraResponse, *, include_debug: bool = False) -> Dict[str, Any]:
+    charts: List[Dict[str, Any]] = []
+    if response.chart_spec and response.rows:
+        spec = response.chart_spec
+        chart_type = (spec.type or "bar").lower()
+        if chart_type != "none":
+            charts.append(
+                {
+                    "type": chart_type,
+                    "title": spec.title or spec.caption or "Vera chart",
+                    "caption": spec.caption,
+                    "x": spec.x,
+                    "y": spec.y,
+                    "label": spec.label,
+                    "data": response.rows,
+                }
+            )
+
+    tables = []
+    if response.rows:
+        tables.append(
+            {
+                "title": "Query result",
+                "columns": list(response.rows[0].keys()) if response.rows else [],
+                "rows": response.rows,
+                "row_count": len(response.rows),
+            }
+        )
+
+    payload: Dict[str, Any] = {
+        "action": response.action,
+        "message": response.message,
+        "tables": tables,
+        "charts": charts,
+        "recommendations": response.recommendations,
+        "suggested_next_questions": response.suggested_next_questions,
+    }
+    if include_debug:
+        payload["debug"] = {
+            "sql": response.sql,
+            "queries": [
+                {
+                    "purpose": q.purpose,
+                    "sql": q.sql,
+                    "row_count": len(q.rows),
+                }
+                for q in response.executed_queries
+            ],
+        }
+    return payload
 
 
 __all__ = [
@@ -301,9 +424,11 @@ __all__ = [
     "VeraFinal",
     "VeraPlan",
     "VeraQuery",
+    "VeraQueryExecutionError",
     "VeraResponse",
     "answer_with_vera",
     "final_with_vera",
     "format_vera_final",
     "plan_with_vera",
+    "response_to_web_payload",
 ]

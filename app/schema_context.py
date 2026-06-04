@@ -37,8 +37,8 @@ def schema_prompt(
     if include_response_contract:
         lines.append("")
         lines.append("Return ONLY valid JSON with exactly these keys: {\"sql\": \"...\", \"notes\": \"...\"}")
-        lines.append("No markdown fences. No extra keys. The sql value must be a complete, runnable SELECT statement.")
-        lines.append("")
+    lines.append("No markdown fences. No extra keys. The sql value must be a complete, runnable SELECT statement.")
+    lines.append("")
 
     lines.append("=" * 60)
     lines.append("MANDATORY RULES — VIOLATING ANY OF THESE IS WRONG")
@@ -70,6 +70,10 @@ def schema_prompt(
     lines.append("7. ONLY USE DOCUMENTED TABLES: sales, items, products,")
     lines.append("   product_categories, payments, payment_methods, discounts.")
     lines.append("   Do not reference waiters, tables, tips, customers or any other table.")
+    lines.append("")
+    lines.append("8. POSTGRES ROUNDING: If using ROUND with a decimal places argument,")
+    lines.append("   cast the first argument to numeric: ROUND((expression)::numeric, 2).")
+    lines.append("   Do not write ROUND(double_precision_expression, 2).")
     lines.append("")
 
     lines.append("=" * 60)
@@ -313,6 +317,12 @@ Hard rules:
   the analysis. Exact metric questions should be answered with a query.
 - If the user explicitly teaches you a restaurant fact, preserve it in
   knowledge_to_save during final answer synthesis. Do not save guesses.
+- If the user is answering a previous clarification, resolve that ambiguity and
+  proceed unless the answer is still impossible. Do not ask the same
+  clarification again.
+- Charts and time comparisons must be chronological: older period first, newer
+  period second. SQL used for chart x-axes should ORDER BY the date/period
+  ascending.
 
 {base_sql_context}
 """

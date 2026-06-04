@@ -5,6 +5,7 @@ from pathlib import Path
 from app.tenant_store import (
     export_restaurant_knowledge_markdown,
     trim_conversation_messages,
+    _normalize_email,
 )
 
 
@@ -34,6 +35,9 @@ class TenantStoreHelperTests(unittest.TestCase):
             text = Path(path).read_text(encoding="utf-8")
             self.assertIn("# Fine Dining Norte", text)
             self.assertIn("Has delivery only on weekends.", text)
+
+    def test_email_normalization_is_case_insensitive(self):
+        self.assertEqual(_normalize_email(" Owner@Example.COM "), "owner@example.com")
 
 
 if __name__ == "__main__":

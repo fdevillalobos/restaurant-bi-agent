@@ -6,3 +6,8 @@ __pycache__/
 fudo_schema.xlsx
 control.db
 runtime/
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts

@@ -1,47 +1,100 @@
+from __future__ import annotations
+
 from dotenv import load_dotenv
 load_dotenv()
 
 import os
+from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Body
-from openai import RateLimitError, OpenAIError
+from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from telegram import Update
 
-from app.query_plan import QueryPlan
-from app.sql_builder import build_sql
 from app.db import run_select, DatabaseError
-from app.sql_safety import UnsafeSQL
 from app.introspect import introspect_tables
 from app.llm_planner import question_to_sql
+from app.query_plan import QueryPlan
+from app.sql_builder import build_sql
+from app.sql_safety import UnsafeSQL
+from app.tenant_store import init_db
 from app.verbalizer import verbalize_answer
+from app.web_api import router as web_router
 
 
-app = FastAPI(title="Restaurant BI Agent (MVP)")
+app = FastAPI(title="Restaurant BI Agent")
+app.include_router(web_router)
+
+_telegram_app = None
+_DEV_SESSION_SECRET = "dev-secret-change-me"
 
 
 class QueryRequest(BaseModel):
     sql: str = Field(..., description="SELECT-only SQL (Postgres dialect)")
     preview: bool = True
 
-class AskRequest(BaseModel):
-    question: str
-    restaurant: str
-    preview: bool = True
-
-def _pretty_sql(sql: str) -> str:
-    return "\n".join(line.rstrip() for line in sql.strip().splitlines())
 
 def _default_restaurant() -> str:
     return os.getenv("DEFAULT_RESTAURANT", "Gamba")
+
+
+def _is_production_runtime() -> bool:
+    env = os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or os.getenv("RAILWAY_ENVIRONMENT") or ""
+    return env.lower() in {"production", "prod"} or bool(os.getenv("RAILWAY_SERVICE_ID"))
+
+
+def _require_production_session_secret() -> None:
+    secret = os.getenv("WEB_SESSION_SECRET", "").strip()
+    if _is_production_runtime() and (not secret or secret == _DEV_SESSION_SECRET):
+        raise RuntimeError("WEB_SESSION_SECRET must be set to a strong non-default value in production.")
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    _require_production_session_secret()
+    init_db()
+    if os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
+        from app.telegram_bot import build_app
+
+        global _telegram_app
+        _telegram_app = build_app()
+        await _telegram_app.initialize()
+        await _telegram_app.start()
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    if _telegram_app is not None:
+        await _telegram_app.stop()
+        await _telegram_app.shutdown()
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    if _telegram_app is None:
+        raise HTTPException(status_code=503, detail="Telegram webhook is not configured.")
+    data = await request.json()
+    update = Update.de_json(data, _telegram_app.bot)
+    await _telegram_app.process_update(update)
+    return {"ok": True}
+
 
 @app.get("/restaurants")
 def restaurants():
     rows = run_select(
         "SELECT restaurant, COUNT(*) AS sales_cnt "
         "FROM sales GROUP BY restaurant ORDER BY sales_cnt DESC LIMIT 200;",
-        preview=False
+        preview=False,
     )
     return {"restaurants": rows}
+
 
 @app.post("/ask")
 def ask(
@@ -49,63 +102,73 @@ def ask(
     include_data: bool = False,
     include_sql: bool = False,
     preview: bool = True,
-    restaurant: str | None = None,
+    restaurant: Optional[str] = None,
 ):
     restaurant = restaurant or _default_restaurant()
     plan = question_to_sql(question, restaurant=restaurant)
     try:
         rows = run_select(
-        plan.sql,
-        params={"restaurant": restaurant},
-        preview=preview,
-        statement_timeout_ms=int(os.getenv("STATEMENT_TIMEOUT_MS_ASK", "30000")),
+            plan.sql,
+            params={"restaurant": restaurant},
+            preview=preview,
+            statement_timeout_ms=int(os.getenv("STATEMENT_TIMEOUT_MS_ASK", "30000")),
         )
     except DatabaseError as e:
-        # Always return SQL/params if requested, even on DB failures (timeouts, etc.)
         detail = {"db_error": str(e)}
         if include_sql:
             detail["sql"] = plan.sql
             detail["params"] = {"restaurant": restaurant}
             detail["plan"] = plan.model_dump()
-        raise HTTPException(status_code=500, detail=detail)
+        raise HTTPException(status_code=500, detail=detail) from e
 
     answer = verbalize_answer(question, plan, rows)
-
     resp = {"message": answer}
-
     if include_data:
         resp["data"] = rows
-
     if include_sql:
         resp["sql"] = plan.sql
         resp["params"] = {"restaurant": restaurant}
         resp["plan"] = plan.model_dump()
-
     return resp
 
-@app.get("/health")
-def health():
-    return {"ok": True}
 
 @app.post("/ask_plan")
 def ask_plan(plan: QueryPlan):
     built = build_sql(plan)
     return {"plan": plan.model_dump(), "sql": built.sql, "params": built.params}
 
+
 @app.get("/introspect")
 def introspect(schema: str = "public"):
     return introspect_tables(schema=schema)
+
 
 @app.post("/run_sql")
 def run_sql(req: QueryRequest):
     try:
         rows = run_select(
-        req.sql,
-        preview=req.preview,
-        statement_timeout_ms=int(os.getenv("STATEMENT_TIMEOUT_MS_RUNSQL", "8000")),
+            req.sql,
+            preview=req.preview,
+            statement_timeout_ms=int(os.getenv("STATEMENT_TIMEOUT_MS_RUNSQL", "8000")),
         )
         return {"rows": rows, "row_count": len(rows)}
     except UnsafeSQL as e:
-        raise HTTPException(status_code=400, detail=f"Unsafe SQL: {e}")
+        raise HTTPException(status_code=400, detail=f"Unsafe SQL: {e}") from e
     except DatabaseError as e:
-        raise HTTPException(status_code=500, detail=f"DB error: {e}")
+        raise HTTPException(status_code=500, detail=f"DB error: {e}") from e
+
+
+_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
+if _DIST.exists():
+    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+
+
+@app.get("/{full_path:path}")
+def spa(full_path: str):
+    index = _DIST / "index.html"
+    if index.exists():
+        return FileResponse(index)
+    return {
+        "ok": True,
+        "message": "Frontend has not been built yet. Run `npm install && npm run build` in web/.",
+    }

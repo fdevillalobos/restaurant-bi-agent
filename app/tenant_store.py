@@ -24,6 +24,10 @@ class User:
     dsn_id: Optional[int]
 
 
+def _normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
 def _connect(db_dsn: str = DEFAULT_DB_DSN) -> psycopg.Connection:
     dsn = db_dsn or os.getenv("CONTROL_DB_DSN", "")
     return psycopg.connect(dsn, row_factory=dict_row)
@@ -50,6 +54,12 @@ def init_db(db_dsn: str = DEFAULT_DB_DSN) -> None:
                     role TEXT NOT NULL,
                     dsn_id INTEGER REFERENCES dsns(id)
                 );
+                """
+            )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower_unique
+                ON users (LOWER(email));
                 """
             )
             cur.execute(
@@ -103,6 +113,26 @@ def init_db(db_dsn: str = DEFAULT_DB_DSN) -> None:
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     PRIMARY KEY (dsn_id, restaurant_name)
                 );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS web_chat_messages (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    dsn_id INTEGER NOT NULL REFERENCES dsns(id),
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    payload TEXT,
+                    selected_restaurants TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_web_chat_messages_user_dsn_created
+                ON web_chat_messages (user_id, dsn_id, created_at DESC, id DESC);
                 """
             )
         conn.commit()
@@ -180,6 +210,7 @@ def create_user(
     dsn_id: Optional[int],
     db_dsn: str = DEFAULT_DB_DSN,
 ) -> int:
+    email = _normalize_email(email)
     with _connect(db_dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -192,9 +223,10 @@ def create_user(
 
 
 def get_user_by_email(email: str, db_dsn: str = DEFAULT_DB_DSN) -> Optional[User]:
+    email = _normalize_email(email)
     with _connect(db_dsn) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM users WHERE email = %s", (email,))
+            cur.execute("SELECT * FROM users WHERE LOWER(email) = LOWER(%s)", (email,))
             row = cur.fetchone()
     if not row:
         return None
@@ -444,6 +476,99 @@ def clear_user_conversation_memory(
         with conn.cursor() as cur:
             cur.execute(
                 "DELETE FROM user_conversation_memories WHERE user_id = %s AND dsn_id = %s",
+                (user_id, dsn_id),
+            )
+        conn.commit()
+
+
+def append_web_chat_message(
+    user_id: int,
+    dsn_id: int,
+    role: str,
+    content: str,
+    payload: Optional[Dict[str, Any]] = None,
+    selected_restaurants: Optional[List[str]] = None,
+    db_dsn: str = DEFAULT_DB_DSN,
+) -> None:
+    raw_payload = json.dumps(payload, default=str) if payload is not None else None
+    raw_restaurants = json.dumps(selected_restaurants or [])
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO web_chat_messages
+                    (user_id, dsn_id, role, content, payload, selected_restaurants)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (user_id, dsn_id, role, _trim_memory_content(content, 8000), raw_payload, raw_restaurants),
+            )
+        conn.commit()
+
+
+def list_web_chat_messages(
+    user_id: int,
+    dsn_id: int,
+    assistant_limit: int = 10,
+    db_dsn: str = DEFAULT_DB_DSN,
+) -> List[Dict[str, Any]]:
+    row_limit = max(assistant_limit * 4, 20)
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, role, content, payload, selected_restaurants, created_at
+                FROM web_chat_messages
+                WHERE user_id = %s AND dsn_id = %s
+                ORDER BY created_at DESC, id DESC
+                LIMIT %s
+                """,
+                (user_id, dsn_id, row_limit),
+            )
+            rows = cur.fetchall()
+
+    ordered = list(reversed(rows))
+    assistant_seen = 0
+    keep_from = 0
+    for idx in range(len(ordered) - 1, -1, -1):
+        if ordered[idx]["role"] == "assistant":
+            assistant_seen += 1
+            if assistant_seen == assistant_limit:
+                keep_from = max(idx - 1, 0)
+                break
+    selected = ordered[keep_from:] if assistant_seen >= assistant_limit else ordered
+
+    result: List[Dict[str, Any]] = []
+    for row in selected:
+        try:
+            payload = json.loads(row["payload"]) if row.get("payload") else None
+        except Exception:
+            payload = None
+        try:
+            restaurants = json.loads(row["selected_restaurants"] or "[]")
+        except Exception:
+            restaurants = []
+        result.append(
+            {
+                "id": row["id"],
+                "role": row["role"],
+                "content": row["content"],
+                "payload": payload,
+                "selected_restaurants": restaurants,
+                "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+            }
+        )
+    return result
+
+
+def clear_web_chat_messages(
+    user_id: int,
+    dsn_id: int,
+    db_dsn: str = DEFAULT_DB_DSN,
+) -> None:
+    with _connect(db_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM web_chat_messages WHERE user_id = %s AND dsn_id = %s",
                 (user_id, dsn_id),
             )
         conn.commit()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import httpx
 
 from dotenv import load_dotenv
 
@@ -22,6 +23,9 @@ def main() -> int:
     su_cmd.add_argument("--password", required=True)
 
     sub.add_parser("test-openrouter", help="Test the configured LLM provider connection")
+
+    webhook_cmd = sub.add_parser("set-telegram-webhook", help="Configure Telegram webhook URL")
+    webhook_cmd.add_argument("--url", required=True, help="Full webhook URL, e.g. https://app.up.railway.app/telegram/webhook")
 
     args = parser.parse_args()
 
@@ -46,6 +50,23 @@ def main() -> int:
         print(f"Provider: {result['provider']}")
         print(f"Model: {result['model']}")
         print(f"Status: {result['status']}")
+        return 0
+
+    if args.cmd == "set-telegram-webhook":
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        if not token:
+            print("TELEGRAM_BOT_TOKEN is not set.")
+            return 1
+        resp = httpx.post(
+            f"https://api.telegram.org/bot{token}/setWebhook",
+            json={"url": args.url, "drop_pending_updates": True},
+            timeout=20,
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            print(f"Telegram webhook failed: {data}")
+            return 1
+        print(f"Telegram webhook set to {args.url}")
         return 0
 
     return 1
