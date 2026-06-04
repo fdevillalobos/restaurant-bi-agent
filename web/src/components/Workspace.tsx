@@ -11,7 +11,7 @@ import {
   type AppendMessage
 } from "@assistant-ui/react";
 import type { ThreadAssistantMessagePart, ThreadUserMessagePart } from "@assistant-ui/react";
-import { ArrowDown, ArrowUp, Bug, Check, Copy, Database, LogOut, PanelRightOpen, RefreshCw, Square } from "lucide-react";
+import { ArrowDown, ArrowUp, Bug, Check, Copy, Database, LogOut, PanelRightOpen, RefreshCw, Settings as SettingsIcon, Square } from "lucide-react";
 import { api, toChatMessages } from "../api";
 import { cn } from "../lib/utils";
 import type { ChatMessage, ChatResponse, MeResponse, StoredChatMessage, VeraDebug } from "../types";
@@ -24,6 +24,7 @@ import { Switch } from "./ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { VeraResponseBlocks } from "./vera/VeraBlocks";
+import { Settings } from "./Settings";
 
 function appendMessageText(message: AppendMessage) {
   if (typeof message.content === "string") return message.content;
@@ -283,7 +284,8 @@ function Sidebar({
   onDebugChange,
   onSelect,
   onLogout,
-  onOpenInspector
+  onOpenInspector,
+  onOpenSettings
 }: {
   me: MeResponse;
   selected: string[];
@@ -293,6 +295,7 @@ function Sidebar({
   onSelect: (next: string[]) => void;
   onLogout: () => void;
   onOpenInspector: () => void;
+  onOpenSettings: () => void;
 }) {
   const recentQuestions = [...messages].filter((message) => message.role === "user").slice(-5).reverse();
 
@@ -344,6 +347,7 @@ function Sidebar({
           <Switch checked={includeDebug} onCheckedChange={onDebugChange} />
         </label>
         <Button variant="outline" onClick={onOpenInspector}><PanelRightOpen className="h-4 w-4" /> Inspector</Button>
+        {me.capabilities.settings && <Button variant="outline" onClick={onOpenSettings}><SettingsIcon className="h-4 w-4" /> Settings</Button>}
         <Button variant="ghost" onClick={onLogout}><LogOut className="h-4 w-4" /> Logout</Button>
       </div>
     </aside>
@@ -358,6 +362,7 @@ export function Workspace({ initialMe }: { initialMe: MeResponse }) {
   const [includeDebug, setIncludeDebug] = React.useState(false);
   const [loadingHistory, setLoadingHistory] = React.useState(true);
   const [running, setRunning] = React.useState(false);
+  const [view, setView] = React.useState<"chat" | "settings">("chat");
 
   React.useEffect(() => {
     api<{ messages: StoredChatMessage[] }>("/api/chat/history")
@@ -421,6 +426,14 @@ export function Workspace({ initialMe }: { initialMe: MeResponse }) {
 
   const latestDebug = [...messages].reverse().find((message) => message.response?.debug)?.response?.debug;
 
+  if (view === "settings") {
+    return (
+      <TooltipProvider>
+        <Settings me={me} onBack={() => setView("chat")} />
+      </TooltipProvider>
+    );
+  }
+
   return (
     <TooltipProvider>
       <main className="grid h-screen min-h-0 grid-cols-[320px_minmax(0,1fr)] bg-background text-foreground max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]">
@@ -433,6 +446,7 @@ export function Workspace({ initialMe }: { initialMe: MeResponse }) {
           onSelect={(next) => void saveSelection(next)}
           onLogout={() => void logout()}
           onOpenInspector={() => setDebugOpen(true)}
+          onOpenSettings={() => setView("settings")}
         />
         <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
           <header className="flex items-center justify-between gap-3 border-b border-border bg-card px-5 py-3">

@@ -238,6 +238,9 @@ async def login_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user or not verify_password(password, user.password_hash):
         await update.message.reply_text("Invalid credentials. Try /login again.")
         return ConversationHandler.END
+    if not user.is_active:
+        await update.message.reply_text("This account has been deactivated. Contact an admin.")
+        return ConversationHandler.END
     set_session(update.effective_chat.id, user.id, None)
     await update.message.reply_text(
         "Logged in.\n"
@@ -485,7 +488,11 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Please /login first.")
         return
     user = get_user_by_id(user_id)
-    if not user or user.dsn_id is None:
+    if not user or not user.is_active:
+        clear_session(chat_id)
+        await update.message.reply_text("This account has been deactivated. Contact an admin.")
+        return
+    if user.dsn_id is None:
         await update.message.reply_text("No DSN assigned. Contact admin.")
         return
     restaurants = _selected_restaurants(chat_id)

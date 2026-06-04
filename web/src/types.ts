@@ -3,6 +3,7 @@ export type User = {
   email: string;
   role: string;
   dsn_id: number | null;
+  is_active: boolean;
 };
 
 export type MeResponse = {
@@ -10,6 +11,49 @@ export type MeResponse = {
   dsn: { id: number; name: string } | null;
   restaurants: string[];
   selected_restaurants: string[];
+  csrf_token?: string | null;
+  capabilities: {
+    settings: boolean;
+    manage_dsns: boolean;
+  };
+};
+
+export type AdminUser = User & {
+  dsn_name: string;
+  restaurants: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AdminDsn = {
+  id: number;
+  name: string;
+  restaurant_count: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AdminRestaurant = {
+  id: number;
+  name: string;
+  dsn_id: number;
+};
+
+export type AdminInvite = {
+  id: number;
+  email: string;
+  role: string;
+  dsn_id: number | null;
+  dsn_name?: string | null;
+  restaurant_ids: number[];
+  restaurant_names: string[];
+  created_by?: number | null;
+  created_by_email?: string | null;
+  expires_at?: string | null;
+  accepted_at?: string | null;
+  revoked_at?: string | null;
+  created_at?: string | null;
+  status: "pending" | "expired" | "accepted" | "revoked";
 };
 
 export type VeraTable = {

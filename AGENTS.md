@@ -8,7 +8,8 @@ Key flows:
 - Telegram bot handles auth, restaurant selection, and per-user DSN routing
 - FastAPI web app handles signed-cookie login, restaurant selection, Vera chat API, React static serving, and Telegram webhook
 - React web app uses assistant-ui external-store runtime plus shadcn-style Radix/Tailwind components for Vera's analyst workspace
-- Control DB (Postgres) stores users, DSNs, restaurants, sessions, Vera memory, and restaurant knowledge
+- Web Settings lets superusers/scoped admins manage users, invite links, DSNs, and restaurant access
+- Control DB (Postgres) stores users, DSNs, restaurants, sessions, Vera memory, restaurant knowledge, invites, and admin audit events
 
 ## Running Locally
 
@@ -67,6 +68,7 @@ cd web && npm run dev
 - Telegram bot: `app/telegram_bot.py`
 - FastAPI web API + Telegram webhook: `app/main.py`, `app/web_api.py`
 - React web shell/runtime: `web/src/main.tsx`, `web/src/components/Workspace.tsx`
+- Web Settings UI: `web/src/components/Settings.tsx`, `web/src/components/InviteAccept.tsx`
 - Vera BI render blocks: `web/src/components/vera/`
 - Web UI primitives/styles: `web/src/components/ui/`, `web/src/styles.css`
 - Web API/types/formatting: `web/src/api.ts`, `web/src/types.ts`, `web/src/format.ts`, `web/src/charting.ts`
@@ -78,9 +80,11 @@ cd web && npm run dev
 - Use `/whoami` to see selected restaurants and language
 - Use `/restaurants` to select restaurants for your session
 - In web, enable Debug in the sidebar to include SQL/query metadata in the debug drawer
+- In web Settings, raw DSN values are write-only; use the DSN edit form to replace a value, never expect it in API responses
 
 ## Common Pitfalls
 - Missing OPENROUTER_API_KEY or OPENAI_API_KEY → LLM errors, depending on `LLM_PROVIDER`
 - Missing WEB_SESSION_SECRET in production → insecure default web cookie signing
+- Missing `X-CSRF-Token` on authenticated POST/PATCH/DELETE routes → 403 from the web API
 - `%` in SQL must be escaped (handled in planner)
 - Items queries must include `items.canceled IS NOT TRUE`

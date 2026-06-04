@@ -40,6 +40,8 @@ Primary screens:
 - Login
 - Restaurant selector
 - Vera chat workspace with assistant-ui message actions and composer
+- Settings for scoped user, invite, DSN, and restaurant-access administration
+- Public invite acceptance page at `/invite/<token>`
 - Interactive charts
 - Sortable tables
 - Suggested follow-up questions
@@ -66,7 +68,32 @@ Session behavior:
 - Web sessions use `vera_session`, a signed HTTP-only cookie.
 - Cookie signing uses `WEB_SESSION_SECRET`.
 - Selected restaurants are stored in the signed cookie.
+- Sessions include a CSRF token returned by `/api/login` and `/api/me`.
+- Cookie-authenticated state-changing routes require `X-CSRF-Token`, except public invite acceptance.
+- Inactive users are blocked at login and on every authenticated request.
 - Conversation memory remains in the control DB by user + DSN.
+
+## Settings And Invites
+
+Settings is a server-owned administration surface rendered by React:
+
+- `superuser` can manage all users, all DSNs, all roles, invite links, and DSN restaurant sync.
+- `admin` can manage only `user` and `db_admin` accounts in their own DSN.
+- `db_admin` and `user` have no Settings access.
+- Nobody can deactivate or demote the last active `superuser`.
+- Users cannot deactivate themselves.
+
+The control DB stores invite records in `user_invites`:
+
+- Raw invite tokens are returned only once from `POST /api/admin/invites`.
+- Only SHA-256 token hashes are stored.
+- Invites are fixed to email, role, DSN, and restaurant access server-side.
+- Invites expire after 24 hours and are single-use.
+- Active existing users cannot accept an invite; inactive existing users can be reactivated with the invite's access.
+
+DSN administration is superuser-only. List endpoints return DSN IDs, names, timestamps, and restaurant counts, never raw connection strings. DSN values are accepted only as write-only create/update inputs.
+
+Admin mutations are written to `admin_audit_events` with actor, action, target, and non-secret details.
 
 ## Deployment
 

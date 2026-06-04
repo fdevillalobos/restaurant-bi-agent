@@ -1,12 +1,18 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { api } from "./api";
+import { InviteAccept } from "./components/InviteAccept";
 import { Login } from "./components/Login";
 import { Workspace } from "./components/Workspace";
 import type { MeResponse } from "./types";
 import "./styles.css";
 
 function App() {
+  const inviteMatch = window.location.pathname.match(/^\/invite\/([^/]+)$/);
+  if (inviteMatch) {
+    return <InviteAccept token={decodeURIComponent(inviteMatch[1])} />;
+  }
+
   const [me, setMe] = React.useState<MeResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
 

@@ -79,6 +79,36 @@ Then open `http://127.0.0.1:8000`.
 
 Vera does not return raw HTML. The API returns structured JSON and the frontend renders safe known components.
 
+State-changing web routes use the signed cookie plus a CSRF token returned by `/api/login` and `/api/me`. The frontend sends it as `X-CSRF-Token`.
+
+### Web settings
+
+The web app includes a Settings section for `superuser` and scoped `admin` users:
+
+- `superuser` can manage all users, invites, DSNs, roles, and restaurant sync.
+- `admin` can manage only `user` and `db_admin` accounts in their own DSN.
+- `db_admin` and `user` do not see Settings.
+- New users are created through 24-hour, single-use invite links.
+- Users are deactivated instead of hard-deleted.
+- Raw DSN values are write-only: they can be created or replaced, but are never returned by list endpoints.
+
+Settings API routes:
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/admin/users` | List users visible to the current admin scope |
+| `PATCH /api/admin/users/{id}` | Update role, DSN, active status, and restaurant restrictions |
+| `GET /api/admin/invites` | List invite statuses |
+| `POST /api/admin/invites` | Create a copyable invite link |
+| `DELETE /api/admin/invites/{id}` | Revoke a pending invite |
+| `GET /api/admin/dsns` | List DSNs without raw connection strings |
+| `POST /api/admin/dsns` | Superuser-only DSN create, connection test, and restaurant sync |
+| `PATCH /api/admin/dsns/{id}` | Superuser-only DSN name/update; DSN value is write-only |
+| `POST /api/admin/dsns/{id}/sync-restaurants` | Superuser-only restaurant sync |
+| `GET /api/admin/dsns/{id}/restaurants` | List restaurants for access assignment |
+| `GET /api/invites/{token}` | Public invite preview |
+| `POST /api/invites/{token}/accept` | Public password creation for the fixed invite email/access |
+
 The production UI is built from:
 
 - assistant-ui external-store runtime for the thread and composer

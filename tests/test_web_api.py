@@ -17,6 +17,10 @@ def _client():
     return TestClient(app)
 
 
+def _csrf(login_response):
+    return login_response.json()["csrf_token"]
+
+
 class WebApiTests(unittest.TestCase):
     def setUp(self):
         os.environ["WEB_SESSION_SECRET"] = "test-secret"
@@ -31,6 +35,55 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertIn("vera_session", res.cookies)
         self.assertEqual(res.json()["restaurants"], ["A"])
+        self.assertIn("csrf_token", res.json())
+
+    def test_inactive_user_cannot_login(self):
+        user = User(id=1, email="owner@example.com", password_hash="hash", role="user", dsn_id=10, is_active=False)
+        with patch("app.web_api.get_user_by_email", return_value=user), \
+             patch("app.web_api.verify_password", return_value=True):
+            res = _client().post("/api/login", json={"email": "owner@example.com", "password": "pw"})
+        self.assertEqual(res.status_code, 401)
+
+    def test_admin_mutation_requires_csrf(self):
+        actor = User(id=1, email="admin@example.com", password_hash="hash", role="superuser", dsn_id=None)
+        target = User(id=2, email="target@example.com", password_hash="hash", role="user", dsn_id=10)
+        client = _client()
+        with patch("app.web_api.get_user_by_email", return_value=actor), \
+             patch("app.web_api.verify_password", return_value=True), \
+             patch("app.web_api.get_user_by_id", side_effect=[actor, target]):
+            client.post("/api/login", json={"email": "admin@example.com", "password": "pw"})
+            res = client.patch("/api/admin/users/2", json={"is_active": False})
+        self.assertEqual(res.status_code, 403)
+
+    def test_scoped_admin_cannot_create_admin_invite(self):
+        actor = User(id=1, email="admin@example.com", password_hash="hash", role="admin", dsn_id=10)
+        client = _client()
+        with patch("app.web_api.get_user_by_email", side_effect=[actor, None]), \
+             patch("app.web_api.verify_password", return_value=True), \
+             patch("app.web_api.get_user_by_id", return_value=actor), \
+             patch("app.web_api.get_dsn_by_id", return_value={"id": 10, "name": "Client"}), \
+             patch("app.web_api.list_accessible_restaurants", return_value=[{"name": "A"}]):
+            login = client.post("/api/login", json={"email": "admin@example.com", "password": "pw"})
+            res = client.post(
+                "/api/admin/invites",
+                json={"email": "new@example.com", "role": "admin", "dsn_id": 10, "restaurant_ids": []},
+                headers={"X-CSRF-Token": _csrf(login)},
+            )
+        self.assertEqual(res.status_code, 403)
+
+    def test_admin_dsn_list_never_returns_raw_dsn(self):
+        actor = User(id=1, email="admin@example.com", password_hash="hash", role="superuser", dsn_id=None)
+        client = _client()
+        with patch("app.web_api.get_user_by_email", return_value=actor), \
+             patch("app.web_api.verify_password", return_value=True), \
+             patch("app.web_api.get_user_by_id", return_value=actor), \
+             patch("app.web_api.get_dsn_by_id", return_value=None), \
+             patch("app.web_api.list_accessible_restaurants", return_value=[]), \
+             patch("app.web_api.list_dsns_safe", return_value=[{"id": 1, "name": "Client", "restaurant_count": 2, "dsn": "postgres://secret"}]):
+            client.post("/api/login", json={"email": "admin@example.com", "password": "pw"})
+            res = client.get("/api/admin/dsns")
+        self.assertEqual(res.status_code, 200)
+        self.assertNotIn("dsn", res.json()["dsns"][0])
 
     def test_select_rejects_inaccessible_restaurant(self):
         user = User(id=1, email="owner@example.com", password_hash="hash", role="user", dsn_id=10)
@@ -40,8 +93,8 @@ class WebApiTests(unittest.TestCase):
              patch("app.web_api.get_user_by_id", return_value=user), \
              patch("app.web_api.get_dsn_by_id", return_value={"id": 10, "name": "Client"}), \
              patch("app.web_api.list_accessible_restaurants", return_value=[{"name": "A"}]):
-            client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
-            res = client.post("/api/restaurants/select", json={"restaurant_names": ["B"]})
+            login = client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
+            res = client.post("/api/restaurants/select", json={"restaurant_names": ["B"]}, headers={"X-CSRF-Token": _csrf(login)})
         self.assertEqual(res.status_code, 403)
 
     def test_chat_returns_structured_payload_without_html(self):
@@ -70,8 +123,8 @@ class WebApiTests(unittest.TestCase):
              patch("app.web_api.answer_with_vera", return_value=vera_response), \
              patch("app.web_api.append_user_conversation_memory") as append_memory, \
              patch("app.web_api.append_web_chat_message") as append_web:
-            client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
-            res = client.post("/api/chat", json={"message": "Sales?", "restaurant_names": ["A"], "include_debug": True})
+            login = client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
+            res = client.post("/api/chat", json={"message": "Sales?", "restaurant_names": ["A"], "include_debug": True}, headers={"X-CSRF-Token": _csrf(login)})
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(data["message"], "Sales increased.")
@@ -114,9 +167,10 @@ class WebApiTests(unittest.TestCase):
              patch("app.web_api.answer_with_vera", side_effect=[clarify_response, answer_response]) as answer_with_vera, \
              patch("app.web_api.append_user_conversation_memory"), \
              patch("app.web_api.append_web_chat_message"):
-            client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
-            client.post("/api/chat", json={"message": "How much were sales last month vs previous?", "restaurant_names": ["A"]})
-            res = client.post("/api/chat", json={"message": "May completed vs April. Both complete.", "restaurant_names": ["A"]})
+            login = client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
+            headers = {"X-CSRF-Token": _csrf(login)}
+            client.post("/api/chat", json={"message": "How much were sales last month vs previous?", "restaurant_names": ["A"]}, headers=headers)
+            res = client.post("/api/chat", json={"message": "May completed vs April. Both complete.", "restaurant_names": ["A"]}, headers=headers)
         self.assertEqual(res.status_code, 200)
         second_question = answer_with_vera.call_args_list[1].args[0]
         self.assertIn("Original question: How much were sales last month vs previous?", second_question)
@@ -136,8 +190,8 @@ class WebApiTests(unittest.TestCase):
              patch("app.web_api.answer_with_vera", side_effect=DatabaseError("canceling statement due to statement timeout")), \
              patch("app.web_api.append_user_conversation_memory") as append_memory, \
              patch("app.web_api.append_web_chat_message") as append_web:
-            client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
-            res = client.post("/api/chat", json={"message": "Big diagnostic?", "restaurant_names": ["A"], "include_debug": True})
+            login = client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
+            res = client.post("/api/chat", json={"message": "Big diagnostic?", "restaurant_names": ["A"], "include_debug": True}, headers={"X-CSRF-Token": _csrf(login)})
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(data["action"], "answer")
@@ -166,8 +220,8 @@ class WebApiTests(unittest.TestCase):
              patch("app.web_api.answer_with_vera", side_effect=error), \
              patch("app.web_api.append_user_conversation_memory"), \
              patch("app.web_api.append_web_chat_message"):
-            client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
-            res = client.post("/api/chat", json={"message": "Top lunch vs dinner products?", "restaurant_names": ["A"], "include_debug": True})
+            login = client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
+            res = client.post("/api/chat", json={"message": "Top lunch vs dinner products?", "restaurant_names": ["A"], "include_debug": True}, headers={"X-CSRF-Token": _csrf(login)})
         self.assertEqual(res.status_code, 200)
         debug = res.json()["debug"]
         self.assertEqual(debug["failed_query"]["purpose"], "Find top products by daypart")
