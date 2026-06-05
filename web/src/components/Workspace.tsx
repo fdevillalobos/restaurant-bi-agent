@@ -24,7 +24,7 @@ import { Sheet, SheetContent, SheetTitle } from "./ui/sheet";
 import { Skeleton } from "./ui/skeleton";
 import { Switch } from "./ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { TooltipProvider } from "./ui/tooltip";
 import { VeraResponseBlocks } from "./vera/VeraBlocks";
 import { Settings } from "./Settings";
 
@@ -294,7 +294,9 @@ function Sidebar({
   onLogout,
   onOpenInspector,
   onOpenSettings,
-  className
+  onOpenMenu,
+  className,
+  mode = "compact"
 }: {
   me: MeResponse;
   selected: string[];
@@ -307,15 +309,26 @@ function Sidebar({
   onLogout: () => void;
   onOpenInspector: () => void;
   onOpenSettings: () => void;
+  onOpenMenu?: () => void;
   className?: string;
+  mode?: "compact" | "menu";
 }) {
   const recentQuestions = [...messages].filter((message) => message.role === "user").slice(-5).reverse();
+  const showRecent = mode === "compact";
+  const showMenuControls = mode === "menu";
 
   return (
     <aside className={cn("workspace-sidebar flex min-h-0 flex-col border-r border-border bg-card", className)}>
       <div className="sidebar-brand border-b border-border p-5">
-        <div className="brand-icon mb-4 flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <Database className="h-5 w-5" />
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="brand-icon flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground">
+            <Database className="h-5 w-5" />
+          </div>
+          {onOpenMenu && (
+            <Button variant="outline" size="icon" onClick={onOpenMenu} aria-label={t(language, "openMenu")}>
+              <Menu className="h-4 w-4" />
+            </Button>
+          )}
         </div>
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase text-emerald-700">Vera BI Analyst</p>
@@ -324,57 +337,72 @@ function Sidebar({
         </div>
       </div>
       <ScrollArea className="sidebar-scroll min-h-0 flex-1">
-        <section className="restaurant-section grid gap-3 p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold">{t(language, "restaurants")}</h2>
-            <Badge variant="outline">{selected.length || 0} {t(language, "selected")}</Badge>
-          </div>
-          <div className="restaurant-list grid gap-2">
-            {me.restaurants.map((restaurant) => {
-              const active = selected.includes(restaurant);
-              return (
-                <button
-                  className={cn(
-                    "flex min-h-9 items-center justify-between rounded-md border border-border px-3 py-2 text-left text-sm transition-colors hover:bg-accent",
-                    active && "border-emerald-500 bg-emerald-50 text-emerald-800"
-                  )}
-                  key={restaurant}
-                  onClick={() => onSelect(active ? selected.filter((name) => name !== restaurant) : [...selected, restaurant])}
-                >
-                  <span className="truncate">{restaurant}</span>
-                  {active && <Check className="h-4 w-4" />}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-        <section className="recent-section grid gap-3 border-t border-border p-5">
-          <h2 className="text-sm font-semibold">{t(language, "recentQuestions")}</h2>
-          {recentQuestions.length > 0 ? recentQuestions.map((message) => (
-            <p className="line-clamp-2 rounded-md bg-muted p-2 text-xs text-muted-foreground" key={message.id}>{message.content}</p>
-          )) : <p className="text-sm text-muted-foreground">{t(language, "noQuestionsYet")}</p>}
-        </section>
+        {showMenuControls && (
+          <section className="restaurant-section grid gap-3 p-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">{t(language, "restaurants")}</h2>
+              <Badge variant="outline">{selected.length || 0} {t(language, "selected")}</Badge>
+            </div>
+            <div className="restaurant-list grid gap-2">
+              {me.restaurants.map((restaurant) => {
+                const active = selected.includes(restaurant);
+                return (
+                  <button
+                    className={cn(
+                      "flex min-h-9 items-center justify-between rounded-md border border-border px-3 py-2 text-left text-sm transition-colors hover:bg-accent",
+                      active && "border-emerald-500 bg-emerald-50 text-emerald-800"
+                    )}
+                    key={restaurant}
+                    onClick={() => {
+                      if (active && selected.length <= 1) return;
+                      onSelect(active ? selected.filter((name) => name !== restaurant) : [...selected, restaurant]);
+                    }}
+                  >
+                    <span className="truncate">{restaurant}</span>
+                    {active && <Check className="h-4 w-4" />}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
+        {showRecent && (
+          <section className="recent-section grid gap-3 p-5">
+            <h2 className="text-sm font-semibold">{t(language, "recentQuestions")}</h2>
+            {recentQuestions.length > 0 ? recentQuestions.map((message) => (
+              <p className="line-clamp-2 rounded-md bg-muted p-2 text-xs text-muted-foreground" key={message.id}>{message.content}</p>
+            )) : <p className="text-sm text-muted-foreground">{t(language, "noQuestionsYet")}</p>}
+          </section>
+        )}
       </ScrollArea>
-      <div className="sidebar-controls grid gap-2 border-t border-border p-5">
-        <label className="grid gap-2 rounded-md border border-border px-3 py-2 text-sm">
-          <span className="font-medium">{t(language, "language")}</span>
-          <select
-            className="h-9 rounded-md border border-input bg-background px-2 outline-none focus:ring-2 focus:ring-ring"
-            value={language}
-            onChange={(event) => onLanguageChange(event.target.value as Language)}
-          >
-            <option value="en">{languageNames.en}</option>
-            <option value="es">{languageNames.es}</option>
-          </select>
-        </label>
-        <label className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
-          <span className="flex items-center gap-2"><Bug className="h-4 w-4" /> {t(language, "debug")}</span>
-          <Switch checked={includeDebug} onCheckedChange={onDebugChange} />
-        </label>
-        <Button className="sidebar-inspector" variant="outline" onClick={onOpenInspector}><PanelRightOpen className="h-4 w-4" /> <span className="control-label">{t(language, "inspector")}</span></Button>
-        {me.capabilities.settings && <Button className="sidebar-settings" variant="outline" onClick={onOpenSettings}><SettingsIcon className="h-4 w-4" /> <span className="control-label">{t(language, "settings")}</span></Button>}
-        <Button className="sidebar-logout" variant="ghost" onClick={onLogout}><LogOut className="h-4 w-4" /> <span className="control-label">{t(language, "logout")}</span></Button>
-      </div>
+      {showMenuControls ? (
+        <div className="sidebar-controls grid gap-2 border-t border-border p-5">
+          <label className="grid gap-2 rounded-md border border-border px-3 py-2 text-sm">
+            <span className="font-medium">{t(language, "language")}</span>
+            <select
+              className="h-9 rounded-md border border-input bg-background px-2 outline-none focus:ring-2 focus:ring-ring"
+              value={language}
+              onChange={(event) => onLanguageChange(event.target.value as Language)}
+            >
+              <option value="en">{languageNames.en}</option>
+              <option value="es">{languageNames.es}</option>
+            </select>
+          </label>
+          <label className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
+            <span className="flex items-center gap-2"><Bug className="h-4 w-4" /> {t(language, "debug")}</span>
+            <Switch checked={includeDebug} onCheckedChange={onDebugChange} />
+          </label>
+          <Button className="sidebar-inspector" variant="outline" onClick={onOpenInspector}><PanelRightOpen className="h-4 w-4" /> <span className="control-label">{t(language, "inspector")}</span></Button>
+          {me.capabilities.settings && <Button className="menu-only-mobile md:hidden" variant="outline" onClick={onOpenSettings}><SettingsIcon className="h-4 w-4" /> <span className="control-label">{t(language, "settings")}</span></Button>}
+          <Button className="sidebar-logout" variant="ghost" onClick={onLogout}><LogOut className="h-4 w-4" /> <span className="control-label">{t(language, "logout")}</span></Button>
+        </div>
+      ) : (
+        me.capabilities.settings && (
+          <div className="sidebar-footer grid gap-2 border-t border-border p-5">
+            <Button className="sidebar-settings" variant="outline" onClick={onOpenSettings}><SettingsIcon className="h-4 w-4" /> <span className="control-label">{t(language, "settings")}</span></Button>
+          </div>
+        )
+      )}
     </aside>
   );
 }
@@ -396,7 +424,7 @@ export function Workspace({
   const [loadingHistory, setLoadingHistory] = React.useState(true);
   const [running, setRunning] = React.useState(false);
   const [view, setView] = React.useState<"chat" | "settings">("chat");
-  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
+  const [controlMenuOpen, setControlMenuOpen] = React.useState(false);
 
   React.useEffect(() => {
     api<{ messages: StoredChatMessage[] }>("/api/chat/history")
@@ -493,12 +521,14 @@ export function Workspace({
           onLogout={() => void logout()}
           onOpenInspector={() => setDebugOpen(true)}
           onOpenSettings={() => setView("settings")}
+          onOpenMenu={() => setControlMenuOpen(true)}
         />
-        <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-          <SheetContent className="mobile-menu-sheet left-0 right-auto max-w-[22rem] border-l-0 border-r p-0">
+        <Sheet open={controlMenuOpen} onOpenChange={setControlMenuOpen}>
+          <SheetContent className="control-menu-sheet left-0 right-auto max-w-[22rem] border-l-0 border-r p-0">
             <SheetTitle className="sr-only">{t(language, "menu")}</SheetTitle>
             <Sidebar
-              className="mobile-sidebar"
+              className="menu-sidebar"
+              mode="menu"
               me={me}
               selected={selected}
               messages={messages}
@@ -509,11 +539,11 @@ export function Workspace({
               onSelect={(next) => void saveSelection(next)}
               onLogout={() => void logout()}
               onOpenInspector={() => {
-                setMobileMenuOpen(false);
+                setControlMenuOpen(false);
                 setDebugOpen(true);
               }}
               onOpenSettings={() => {
-                setMobileMenuOpen(false);
+                setControlMenuOpen(false);
                 setView("settings");
               }}
             />
@@ -522,7 +552,7 @@ export function Workspace({
         <section className="chat-pane grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
           <header className="chat-header flex items-center justify-between gap-3 border-b border-border bg-card px-5 py-3">
             <div className="flex min-w-0 items-center gap-3">
-              <Button className="mobile-menu-button md:hidden" variant="outline" size="icon" onClick={() => setMobileMenuOpen(true)} aria-label={t(language, "openMenu")}>
+              <Button className="mobile-menu-button md:hidden" variant="outline" size="icon" onClick={() => setControlMenuOpen(true)} aria-label={t(language, "openMenu")}>
                 <Menu className="h-4 w-4" />
               </Button>
               <div className="min-w-0">
@@ -530,14 +560,7 @@ export function Workspace({
                 <p className="truncate text-xs text-muted-foreground">{selected.length ? selected.join(", ") : t(language, "selectAtLeastOneRestaurant")}</p>
               </div>
             </div>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button className="desktop-inspector-button max-md:hidden" variant="outline" size="icon" onClick={() => setDebugOpen(true)} aria-label={t(language, "openInspector")}>
-                  <PanelRightOpen className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{t(language, "openInspector")}</TooltipContent>
-            </Tooltip>
+            <div />
           </header>
           {loadingHistory ? (
             <div className="mx-auto grid w-full max-w-4xl gap-4 p-8">

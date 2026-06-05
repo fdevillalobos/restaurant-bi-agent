@@ -139,13 +139,21 @@ button {
     display: none;
   }
 
-  .mobile-menu-sheet {
+  .control-menu-sheet {
     width: min(22rem, calc(100vw - 2rem));
   }
 
-  .mobile-sidebar {
+  .menu-sidebar {
     height: 100%;
     border-right: 0;
+  }
+
+  .menu-sidebar.workspace-sidebar {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .menu-sidebar .sidebar-scroll {
+    max-height: none;
   }
 
   .workspace-sidebar {

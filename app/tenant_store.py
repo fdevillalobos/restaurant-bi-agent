@@ -259,7 +259,16 @@ def list_dsns_safe(db_dsn: str = DEFAULT_DB_DSN) -> List[Dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT d.id, d.name, d.created_at, d.updated_at, COUNT(r.id)::INT AS restaurant_count
+                SELECT
+                    d.id,
+                    d.name,
+                    d.created_at,
+                    d.updated_at,
+                    COUNT(r.id)::INT AS restaurant_count,
+                    COALESCE(
+                        ARRAY_AGG(r.name ORDER BY r.name) FILTER (WHERE r.id IS NOT NULL),
+                        ARRAY[]::TEXT[]
+                    ) AS restaurant_names
                 FROM dsns d
                 LEFT JOIN restaurants r ON r.dsn_id = d.id
                 GROUP BY d.id, d.name, d.created_at, d.updated_at

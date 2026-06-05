@@ -94,11 +94,12 @@ class WebApiTests(unittest.TestCase):
              patch("app.web_api.get_user_by_id", return_value=actor), \
              patch("app.web_api.get_dsn_by_id", return_value=None), \
              patch("app.web_api.list_accessible_restaurants", return_value=[]), \
-             patch("app.web_api.list_dsns_safe", return_value=[{"id": 1, "name": "Client", "restaurant_count": 2, "dsn": "postgres://secret"}]):
+             patch("app.web_api.list_dsns_safe", return_value=[{"id": 1, "name": "Client", "restaurant_count": 2, "restaurant_names": ["A", "B"], "dsn": "postgres://secret"}]):
             client.post("/api/login", json={"email": "admin@example.com", "password": "pw"})
             res = client.get("/api/admin/dsns")
         self.assertEqual(res.status_code, 200)
         self.assertNotIn("dsn", res.json()["dsns"][0])
+        self.assertEqual(res.json()["dsns"][0]["restaurant_names"], ["A", "B"])
 
     def test_select_rejects_inaccessible_restaurant(self):
         user = User(id=1, email="owner@example.com", password_hash="hash", role="user", dsn_id=10)
@@ -122,6 +123,16 @@ class WebApiTests(unittest.TestCase):
              patch("app.web_api.list_accessible_restaurants", return_value=[{"name": "A"}]):
             login = client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
             res = client.post("/api/restaurants/select", json={"restaurant_names": []}, headers={"X-CSRF-Token": _csrf(login)})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["selected_restaurants"], ["A"])
+
+    def test_multi_restaurant_login_defaults_to_first_accessible(self):
+        user = User(id=1, email="owner@example.com", password_hash="hash", role="user", dsn_id=10)
+        with patch("app.web_api.get_user_by_email", return_value=user), \
+             patch("app.web_api.verify_password", return_value=True), \
+             patch("app.web_api.get_dsn_by_id", return_value={"id": 10, "name": "Client"}), \
+             patch("app.web_api.list_accessible_restaurants", return_value=[{"name": "A"}, {"name": "B"}]):
+            res = _client().post("/api/login", json={"email": "owner@example.com", "password": "pw"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["selected_restaurants"], ["A"])
 

@@ -224,7 +224,7 @@ def _auto_selected_restaurants(user: User, selected: Optional[List[str]]) -> Lis
     if current:
         return current
     accessible = _accessible_names(user)
-    return accessible if len(accessible) == 1 else []
+    return accessible[:1]
 
 
 def _validate_restaurants(user: User, names: List[str]) -> List[str]:

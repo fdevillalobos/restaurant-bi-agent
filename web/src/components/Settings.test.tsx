@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { MeResponse } from "../types";
 import { Settings } from "./Settings";
@@ -6,7 +7,7 @@ import { Settings } from "./Settings";
 vi.mock("../api", () => ({
   api: vi.fn(async (path: string) => {
     if (path === "/api/admin/users") return { users: [] };
-    if (path === "/api/admin/dsns") return { dsns: [{ id: 10, name: "Client", restaurant_count: 2 }] };
+    if (path === "/api/admin/dsns") return { dsns: [{ id: 10, name: "Client", restaurant_count: 2, restaurant_names: ["A", "B"] }] };
     if (path === "/api/admin/invites") return { invites: [] };
     return {};
   })
@@ -44,6 +45,26 @@ describe("Settings", () => {
     );
 
     await waitFor(() => expect(screen.getByRole("tab", { name: "DSNs" })).toBeInTheDocument());
+  });
+
+  it("shows synced restaurant names in DSN administration", async () => {
+    const user = userEvent.setup();
+    render(
+      <Settings
+        me={{
+          ...baseMe,
+          user: { ...baseMe.user, role: "superuser", dsn_id: null },
+          capabilities: { settings: true, manage_dsns: true }
+        }}
+        language="en"
+        onBack={() => undefined}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByRole("tab", { name: "DSNs" })).toBeInTheDocument());
+    await user.click(screen.getByRole("tab", { name: "DSNs" }));
+    expect(screen.getByText("A")).toBeInTheDocument();
+    expect(screen.getByText("B")).toBeInTheDocument();
   });
 
   it("renders Spanish labels when language is Spanish", async () => {

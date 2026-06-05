@@ -40,6 +40,26 @@ function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return <select className="h-10 rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" {...props} />;
 }
 
+function RestaurantNameBadges({ names, language }: { names: string[]; language: Language }) {
+  const visible = names.slice(0, 8);
+  const hiddenCount = Math.max(0, names.length - visible.length);
+
+  if (names.length === 0) {
+    return <p className="text-sm text-muted-foreground">{t(language, "noSyncedRestaurants")}</p>;
+  }
+
+  return (
+    <div className="mt-2 flex max-w-3xl flex-wrap gap-2">
+      {visible.map((restaurant) => (
+        <Badge key={restaurant} variant="outline" className="max-w-56 truncate">
+          {restaurant}
+        </Badge>
+      ))}
+      {hiddenCount > 0 && <Badge variant="secondary">+{hiddenCount}</Badge>}
+    </div>
+  );
+}
+
 function RestaurantChecks({
   restaurants,
   selected,
@@ -374,12 +394,13 @@ function DsnsTab({ dsns, onRefresh, language }: { dsns: AdminDsn[]; onRefresh: (
       </section>
       <section className="grid gap-3">
         {dsns.map((item) => (
-          <div key={item.id} className="flex items-center justify-between gap-3 rounded-md border border-border bg-card p-4">
-            <div>
+          <div key={item.id} className="flex items-start justify-between gap-3 rounded-md border border-border bg-card p-4">
+            <div className="min-w-0">
               <p className="font-medium">{item.name}</p>
               <p className="text-sm text-muted-foreground">{item.restaurant_count} {t(language, "syncedRestaurants")}</p>
+              <RestaurantNameBadges names={item.restaurant_names || []} language={language} />
             </div>
-            <div className="flex gap-2">
+            <div className="flex shrink-0 gap-2">
               <Button variant="outline" onClick={() => void sync(item.id)}><RotateCcw className="h-4 w-4" /> {t(language, "sync")}</Button>
               <Button variant="ghost" onClick={() => { setEditing(item); setEditName(item.name); setEditDsn(""); }}>{t(language, "edit")}</Button>
             </div>

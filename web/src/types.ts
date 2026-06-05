@@ -30,6 +30,7 @@ export type AdminDsn = {
   id: number;
   name: string;
   restaurant_count: number;
+  restaurant_names: string[];
   created_at?: string;
   updated_at?: string;
 };
