@@ -28,7 +28,7 @@ describe("InviteAccept", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<InviteAccept token="abc" />);
+    render(<InviteAccept token="abc" language="en" onLanguageChange={() => undefined} />);
 
     await waitFor(() => expect(screen.getByText("new@example.com")).toBeInTheDocument());
     expect(screen.getByText("Client")).toBeInTheDocument();

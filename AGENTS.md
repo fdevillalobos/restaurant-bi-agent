@@ -8,6 +8,7 @@ Key flows:
 - Telegram bot handles auth, restaurant selection, and per-user DSN routing
 - FastAPI web app handles signed-cookie login, restaurant selection, Vera chat API, React static serving, and Telegram webhook
 - React web app uses assistant-ui external-store runtime plus shadcn-style Radix/Tailwind components for Vera's analyst workspace
+- Web UI supports English and Spanish/LATAM; Spanish questions force Spanish Vera responses, otherwise Vera follows the selected web language
 - Web Settings lets superusers/scoped admins manage users, invite links, DSNs, and restaurant access
 - Control DB (Postgres) stores users, DSNs, restaurants, sessions, Vera memory, restaurant knowledge, invites, and admin audit events
 
@@ -72,6 +73,7 @@ cd web && npm run dev
 - Vera BI render blocks: `web/src/components/vera/`
 - Web UI primitives/styles: `web/src/components/ui/`, `web/src/styles.css`
 - Web API/types/formatting: `web/src/api.ts`, `web/src/types.ts`, `web/src/format.ts`, `web/src/charting.ts`
+- Web translations/language behavior: `web/src/i18n.ts`, `app/web_api.py`, `app/vera.py`
 - Web architecture docs: `docs/web-interface-architecture.md`
 - Control DB + auth: `app/tenant_store.py`, `app/auth.py`
 

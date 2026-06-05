@@ -65,16 +65,22 @@ SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
 class LoginRequest(BaseModel):
     email: str
     password: str
+    language: Optional[str] = None
 
 
 class RestaurantSelectRequest(BaseModel):
     restaurant_names: List[str] = Field(default_factory=list)
 
 
+class LanguageRequest(BaseModel):
+    language: str
+
+
 class ChatRequest(BaseModel):
     message: str
     restaurant_names: Optional[List[str]] = None
     include_debug: bool = False
+    language: Optional[str] = None
 
 
 class AdminUserPatch(BaseModel):
@@ -108,6 +114,22 @@ class InviteAcceptRequest(BaseModel):
 def _pending_clarification(session: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     pending = session.get("pending_clarification")
     return pending if isinstance(pending, dict) and pending.get("original_question") else None
+
+
+def _normalize_language(language: Optional[str]) -> str:
+    value = (language or "").strip().lower()
+    if value in {"es", "es-ar", "es-latam", "spanish"}:
+        return "es"
+    if value in {"en", "en-us", "english"}:
+        return "en"
+    return "en"
+
+
+def _chat_language(message: str, session: Dict[str, Any], requested: Optional[str]) -> str:
+    detected = detect_language(message)
+    if detected == "es":
+        return "es"
+    return _normalize_language(requested or session.get("language") or "en")
 
 
 def _session_secret() -> str:
@@ -197,6 +219,14 @@ def _accessible_names(user: User) -> List[str]:
     return [r["name"] for r in list_accessible_restaurants(user)]
 
 
+def _auto_selected_restaurants(user: User, selected: Optional[List[str]]) -> List[str]:
+    current = [name for name in (selected or []) if name]
+    if current:
+        return current
+    accessible = _accessible_names(user)
+    return accessible if len(accessible) == 1 else []
+
+
 def _validate_restaurants(user: User, names: List[str]) -> List[str]:
     allowed = set(_accessible_names(user))
     selected = [n for n in names if n in allowed]
@@ -205,7 +235,12 @@ def _validate_restaurants(user: User, names: List[str]) -> List[str]:
     return list(dict.fromkeys(selected))
 
 
-def _me_payload(user: User, selected: List[str], csrf_token: Optional[str] = None) -> Dict[str, Any]:
+def _me_payload(
+    user: User,
+    selected: List[str],
+    csrf_token: Optional[str] = None,
+    language: Optional[str] = None,
+) -> Dict[str, Any]:
     dsn = get_dsn_by_id(user.dsn_id) if user.dsn_id else None
     return {
         "user": _serialize_user(user),
@@ -213,6 +248,7 @@ def _me_payload(user: User, selected: List[str], csrf_token: Optional[str] = Non
         "restaurants": _accessible_names(user),
         "selected_restaurants": selected,
         "csrf_token": csrf_token,
+        "language": _normalize_language(language),
         "capabilities": {
             "settings": user.role in ADMIN_ROLES,
             "manage_dsns": user.role == "superuser",
@@ -226,20 +262,33 @@ def _chat_failure_payload(
     include_debug: bool = False,
     error: Optional[str] = None,
     failed_query: Optional[Dict[str, Any]] = None,
+    language: str = "en",
 ) -> Dict[str, Any]:
+    if language == "es":
+        recommendations = [
+            "Prueba acotar el período, el alcance de restaurantes o la métrica para que Vera pueda ejecutar una consulta más rápida.",
+            "Pide primero el análisis por mes o por semana, y después profundiza en días o productos cuando el patrón esté claro.",
+        ]
+        suggested = [
+            "¿Puedes resumir esto por mes primero?",
+            "¿Qué parte del análisis importa más: ventas, tickets o ticket promedio?",
+        ]
+    else:
+        recommendations = [
+            "Try narrowing the date range, restaurant scope, or metric so Vera can run a faster query.",
+            "Ask for the same analysis by month or by week first, then drill into days or products after the broad pattern is clear.",
+        ]
+        suggested = [
+            "Can you summarize this by month first?",
+            "Which part of this analysis is most important: sales, tickets, or average ticket?",
+        ]
     payload: Dict[str, Any] = {
         "action": "answer",
         "message": message,
         "tables": [],
         "charts": [],
-        "recommendations": [
-            "Try narrowing the date range, restaurant scope, or metric so Vera can run a faster query.",
-            "Ask for the same analysis by month or by week first, then drill into days or products after the broad pattern is clear.",
-        ],
-        "suggested_next_questions": [
-            "Can you summarize this by month first?",
-            "Which part of this analysis is most important: sales, tickets, or average ticket?",
-        ],
+        "recommendations": recommendations,
+        "suggested_next_questions": suggested,
     }
     if include_debug:
         debug: Dict[str, Any] = {}
@@ -342,9 +391,18 @@ def login(req: LoginRequest, response: Response):
     if not user.is_active:
         raise HTTPException(status_code=401, detail="User is deactivated.")
     csrf_token = _new_csrf_token()
-    session = {"user_id": user.id, "selected_restaurants": [], "csrf_token": csrf_token, "iat": int(time.time())}
+    language = _normalize_language(req.language)
+    session = {
+        "user_id": user.id,
+        "selected_restaurants": [],
+        "language": language,
+        "csrf_token": csrf_token,
+        "iat": int(time.time()),
+    }
+    selected = _auto_selected_restaurants(user, [])
+    session["selected_restaurants"] = selected
     _set_session_cookie(response, session)
-    return _me_payload(user, [], csrf_token)
+    return _me_payload(user, selected, csrf_token, language)
 
 
 @router.post("/logout")
@@ -364,18 +422,42 @@ def me(request: Request, response: Response):
         session["csrf_token"] = csrf_token
         session["iat"] = int(time.time())
         _set_session_cookie(response, session)
-    return _me_payload(user, session.get("selected_restaurants") or [], csrf_token)
+    language = _normalize_language(session.get("language"))
+    if session.get("language") != language:
+        session["language"] = language
+        session["iat"] = int(time.time())
+        _set_session_cookie(response, session)
+    selected = _auto_selected_restaurants(user, session.get("selected_restaurants") or [])
+    if selected != (session.get("selected_restaurants") or []):
+        session["selected_restaurants"] = selected
+        session["iat"] = int(time.time())
+        _set_session_cookie(response, session)
+    return _me_payload(user, selected, csrf_token, language)
 
 
 @router.post("/restaurants/select")
 def select_restaurants(req: RestaurantSelectRequest, request: Request, response: Response):
     user, session = _current_user(request)
     _require_csrf(request, session)
-    selected = _validate_restaurants(user, req.restaurant_names)
+    selected = _auto_selected_restaurants(user, _validate_restaurants(user, req.restaurant_names))
     session["selected_restaurants"] = selected
     session["iat"] = int(time.time())
     _set_session_cookie(response, session)
-    return _me_payload(user, selected, session.get("csrf_token"))
+    return _me_payload(user, selected, session.get("csrf_token"), session.get("language"))
+
+
+@router.post("/language")
+def set_language(req: LanguageRequest, request: Request, response: Response):
+    user, session = _current_user(request)
+    _require_csrf(request, session)
+    language = _normalize_language(req.language)
+    session["language"] = language
+    session["iat"] = int(time.time())
+    _set_session_cookie(response, session)
+    selected = _auto_selected_restaurants(user, session.get("selected_restaurants") or [])
+    session["selected_restaurants"] = selected
+    _set_session_cookie(response, session)
+    return _me_payload(user, selected, session.get("csrf_token"), language)
 
 
 @router.post("/memory/reset")
@@ -627,6 +709,7 @@ def chat(req: ChatRequest, request: Request, response: Response):
         restaurants = accessible
     if not restaurants:
         raise HTTPException(status_code=400, detail="Select at least one restaurant.")
+    language = _chat_language(req.message, session, req.language)
 
     history = get_user_conversation_memory(user.id, user.dsn_id)
     knowledge = get_restaurant_knowledge(user.dsn_id, restaurants)
@@ -648,7 +731,7 @@ def chat(req: ChatRequest, request: Request, response: Response):
             dsn=dsn["dsn"],
             history=history,
             restaurant_knowledge=knowledge,
-            language=detect_language(req.message),
+            language=language,
             preview=True,
         )
     except VeraQueryExecutionError as exc:
@@ -656,9 +739,15 @@ def chat(req: ChatRequest, request: Request, response: Response):
         session["selected_restaurants"] = restaurants
         session["iat"] = int(time.time())
         _set_session_cookie(response, session)
+        message = (
+            "No pude completar ese análisis porque la consulta a la base de datos agotó el tiempo de espera. "
+            "El próximo paso más seguro es acotar la pregunta primero y después profundizar cuando sepamos dónde está el movimiento."
+            if language == "es"
+            else "I could not complete that analysis because the database query timed out. "
+            "The safest next step is to narrow the question first, then drill down once we know where the movement is."
+        )
         payload = _chat_failure_payload(
-            "I could not complete that analysis because the database query timed out. "
-            "The safest next step is to narrow the question first, then drill down once we know where the movement is.",
+            message,
             include_debug=req.include_debug,
             error=str(exc),
             failed_query={
@@ -666,6 +755,7 @@ def chat(req: ChatRequest, request: Request, response: Response):
                 "sql": exc.sql,
                 "params": exc.params,
             },
+            language=language,
         )
         append_user_conversation_memory(user.id, user.dsn_id, req.message, payload["message"])
         append_web_chat_message(
@@ -682,11 +772,18 @@ def chat(req: ChatRequest, request: Request, response: Response):
         session["selected_restaurants"] = restaurants
         session["iat"] = int(time.time())
         _set_session_cookie(response, session)
+        message = (
+            "No pude completar ese análisis porque la consulta a la base de datos agotó el tiempo de espera. "
+            "El próximo paso más seguro es acotar la pregunta primero y después profundizar cuando sepamos dónde está el movimiento."
+            if language == "es"
+            else "I could not complete that analysis because the database query timed out. "
+            "The safest next step is to narrow the question first, then drill down once we know where the movement is."
+        )
         payload = _chat_failure_payload(
-            "I could not complete that analysis because the database query timed out. "
-            "The safest next step is to narrow the question first, then drill down once we know where the movement is.",
+            message,
             include_debug=req.include_debug,
             error=str(exc),
+            language=language,
         )
         append_user_conversation_memory(user.id, user.dsn_id, req.message, payload["message"])
         append_web_chat_message(
@@ -703,11 +800,18 @@ def chat(req: ChatRequest, request: Request, response: Response):
         session["selected_restaurants"] = restaurants
         session["iat"] = int(time.time())
         _set_session_cookie(response, session)
+        message = (
+            "Rechacé el SQL generado antes de ejecutarlo porque no pasó las validaciones de seguridad de la app. "
+            "Reformula la pregunta con la métrica, el período y el alcance de restaurantes que querés, y voy a planear una consulta más segura."
+            if language == "es"
+            else "I rejected the generated SQL before running it because it did not pass the app's safety checks. "
+            "Please rephrase the question with the metric, period, and restaurant scope you want, and I will plan a safer query."
+        )
         payload = _chat_failure_payload(
-            "I rejected the generated SQL before running it because it did not pass the app's safety checks. "
-            "Please rephrase the question with the metric, period, and restaurant scope you want, and I will plan a safer query.",
+            message,
             include_debug=req.include_debug,
             error=str(exc),
+            language=language,
         )
         append_user_conversation_memory(user.id, user.dsn_id, req.message, payload["message"])
         append_web_chat_message(

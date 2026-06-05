@@ -1,7 +1,8 @@
 import type { VeraChart } from "./types";
 import { formatCell, formatChartAxis } from "./format";
+import type { Language } from "./i18n";
 
-export function chartOption(chart: VeraChart) {
+export function chartOption(chart: VeraChart, language: Language = "en") {
   const xField = chart.x || chart.label || Object.keys(chart.data[0] || {})[0];
   const yField = chart.y || Object.keys(chart.data[0] || {}).find((key) => typeof chart.data[0]?.[key] === "number");
   const sortedData = [...chart.data].sort((a, b) => {
@@ -18,7 +19,7 @@ export function chartOption(chart: VeraChart) {
   return {
     tooltip: {
       trigger: "axis",
-      valueFormatter: (value: number | string) => formatCell(value, yField || "")
+      valueFormatter: (value: number | string) => formatCell(value, yField || "", language)
     },
     grid: { left: 78, right: 24, top: 28, bottom: 48 },
     xAxis: {
@@ -31,7 +32,7 @@ export function chartOption(chart: VeraChart) {
       type: "value",
       axisLabel: {
         color: "#64748b",
-        formatter: (value: number) => formatChartAxis(value, yField || "")
+        formatter: (value: number) => formatChartAxis(value, yField || "", language)
       },
       splitLine: { lineStyle: { color: "#e2e8f0" } }
     },

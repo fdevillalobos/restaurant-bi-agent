@@ -30,18 +30,23 @@ function numberOptions(field: string): Intl.NumberFormatOptions {
   };
 }
 
-export function formatNumber(value: number, field: string) {
-  if (isPercentField(field)) {
-    return `${value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%`;
-  }
-  if (isMoneyField(field)) {
-    return `$${value.toLocaleString(undefined, numberOptions(field))}`;
-  }
-  return value.toLocaleString(undefined, numberOptions(field));
+function localeFor(language: Language = "en") {
+  return language === "es" ? "es-AR" : "en-US";
 }
 
-export function formatCompactNumber(value: number, field: string) {
-  const compact = value.toLocaleString(undefined, {
+export function formatNumber(value: number, field: string, language: Language = "en") {
+  const locale = localeFor(language);
+  if (isPercentField(field)) {
+    return `${value.toLocaleString(locale, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%`;
+  }
+  if (isMoneyField(field)) {
+    return `$${value.toLocaleString(locale, numberOptions(field))}`;
+  }
+  return value.toLocaleString(locale, numberOptions(field));
+}
+
+export function formatCompactNumber(value: number, field: string, language: Language = "en") {
+  const compact = value.toLocaleString(localeFor(language), {
     notation: "compact",
     compactDisplay: "short",
     minimumFractionDigits: 0,
@@ -52,15 +57,16 @@ export function formatCompactNumber(value: number, field: string) {
   return compact;
 }
 
-export function formatCell(value: unknown, field: string) {
+export function formatCell(value: unknown, field: string, language: Language = "en") {
   if (value === null || value === undefined) return "";
   const parsed = numericValue(value);
-  if (parsed !== null) return formatNumber(parsed, field);
+  if (parsed !== null) return formatNumber(parsed, field, language);
   return String(value);
 }
 
-export function formatChartAxis(value: unknown, field: string) {
+export function formatChartAxis(value: unknown, field: string, language: Language = "en") {
   const parsed = numericValue(value);
   if (parsed === null) return String(value ?? "");
-  return formatCompactNumber(parsed, field);
+  return formatCompactNumber(parsed, field, language);
 }
+import type { Language } from "./i18n";

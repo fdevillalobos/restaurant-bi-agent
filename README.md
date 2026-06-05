@@ -40,6 +40,8 @@ The web interface is a React/Vite app served by FastAPI. It gives Vera a richer 
 
 assistant-ui is used as a frontend React dependency inside `web/`; it is not a Codex skill or a separate backend. Vera's backend still owns auth, restaurant scope, memory, SQL safety, query execution, and structured BI payloads.
 
+The web UI supports English and Spanish/LATAM. The language selector is available on login, invite acceptance, and the signed-in sidebar. The selected language is stored locally and in the signed web session. Vera answers in Spanish when the user asks in Spanish; otherwise she follows the selected web language.
+
 ### Run locally
 
 ```bash
@@ -72,6 +74,7 @@ Then open `http://127.0.0.1:8000`.
 | `POST /api/login` | Log in with existing user email/password |
 | `POST /api/logout` | Clear the web session |
 | `GET /api/me` | Return user, DSN, accessible restaurants, selected restaurants |
+| `POST /api/language` | Save web UI / Vera response language (`en` or `es`) in the signed session |
 | `POST /api/restaurants/select` | Save selected restaurants in signed cookie session |
 | `POST /api/chat` | Ask Vera and receive structured text/table/chart/debug payload |
 | `GET /api/chat/history` | Load the persisted web transcript for the current user + DSN |

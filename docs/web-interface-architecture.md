@@ -18,12 +18,13 @@ assistant-ui is installed as a React dependency in `web/`. It is not a Codex ski
 1. A browser logs in with `POST /api/login`.
 2. FastAPI verifies the existing control DB user and sets a signed HTTP-only cookie.
 3. The browser loads accessible restaurants with `GET /api/me`.
-4. The user selects one or more restaurants with `POST /api/restaurants/select`.
-5. The chat sends `POST /api/chat`.
-6. The backend loads user + DSN memory, restaurant knowledge, and selected restaurants.
-7. Vera plans up to 3 safe SELECT queries, the app executes them, and Vera synthesizes the final answer.
-8. The web API returns structured JSON: text, tables, chart specs/data, recommendations, follow-up questions, and optional debug metadata.
-9. React renders known components. Vera never returns raw HTML.
+4. The browser stores the selected UI language locally and, after login, in the signed session with `POST /api/language`.
+5. The user selects one or more restaurants with `POST /api/restaurants/select`.
+6. The chat sends `POST /api/chat`.
+7. The backend loads user + DSN memory, restaurant knowledge, selected restaurants, and language.
+8. Vera plans up to 3 safe SELECT queries, the app executes them, and Vera synthesizes the final answer.
+9. The web API returns structured JSON: text, tables, chart specs/data, recommendations, follow-up questions, and optional debug metadata.
+10. React renders known components. Vera never returns raw HTML.
 
 ## Frontend
 
@@ -42,6 +43,7 @@ Primary screens:
 - Vera chat workspace with assistant-ui message actions and composer
 - Settings for scoped user, invite, DSN, and restaurant-access administration
 - Public invite acceptance page at `/invite/<token>`
+- English/Spanish-LATAM language selector on login, invite acceptance, and signed-in sidebar
 - Interactive charts
 - Sortable tables
 - Suggested follow-up questions
@@ -53,6 +55,17 @@ assistant-ui uses the current React state as an external store:
 - `POST /api/chat` sends new composer messages to Vera.
 - Assistant messages keep Vera's structured payload for BI cards, charts, tables, recommendations, and debug output.
 - The frontend converts the local Vera message shape into assistant-ui message objects for rendering and composer behavior.
+
+## Language Behavior
+
+The web UI currently supports `en` and `es`:
+
+- Before login, the app initializes from `localStorage` or the browser language.
+- Login sends the current language preference to the backend.
+- Signed-in language changes call `POST /api/language` and update the signed cookie session.
+- `/api/chat` sends the current UI language, but the backend still auto-detects Spanish questions and forces Vera to answer in Spanish.
+- If a question is not detected as Spanish, Vera uses the selected UI language.
+- Tables and charts use localized number formatting in the frontend; Spanish mode uses `es-AR` formatting.
 
 ## Backend
 

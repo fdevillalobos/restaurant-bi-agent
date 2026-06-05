@@ -18,12 +18,13 @@ const baseMe: MeResponse = {
   restaurants: ["A"],
   selected_restaurants: ["A"],
   csrf_token: "csrf",
+  language: "en",
   capabilities: { settings: true, manage_dsns: false }
 };
 
 describe("Settings", () => {
   it("hides DSN administration from scoped admins", async () => {
-    render(<Settings me={baseMe} onBack={() => undefined} />);
+    render(<Settings me={baseMe} language="en" onBack={() => undefined} />);
 
     await waitFor(() => expect(screen.getByRole("tab", { name: "Users" })).toBeInTheDocument());
     expect(screen.queryByRole("tab", { name: "DSNs" })).not.toBeInTheDocument();
@@ -37,10 +38,19 @@ describe("Settings", () => {
           user: { ...baseMe.user, role: "superuser", dsn_id: null },
           capabilities: { settings: true, manage_dsns: true }
         }}
+        language="en"
         onBack={() => undefined}
       />
     );
 
     await waitFor(() => expect(screen.getByRole("tab", { name: "DSNs" })).toBeInTheDocument());
+  });
+
+  it("renders Spanish labels when language is Spanish", async () => {
+    render(<Settings me={{ ...baseMe, language: "es" }} language="es" onBack={() => undefined} />);
+
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Usuarios" })).toBeInTheDocument());
+    expect(screen.getByText("Configuración")).toBeInTheDocument();
+    expect(screen.getByText("Volver al chat")).toBeInTheDocument();
   });
 });

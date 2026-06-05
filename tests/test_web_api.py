@@ -31,11 +31,26 @@ class WebApiTests(unittest.TestCase):
              patch("app.web_api.verify_password", return_value=True), \
              patch("app.web_api.get_dsn_by_id", return_value={"id": 10, "name": "Client"}), \
              patch("app.web_api.list_accessible_restaurants", return_value=[{"name": "A"}]):
-            res = _client().post("/api/login", json={"email": "owner@example.com", "password": "pw"})
+            res = _client().post("/api/login", json={"email": "owner@example.com", "password": "pw", "language": "es-AR"})
         self.assertEqual(res.status_code, 200)
         self.assertIn("vera_session", res.cookies)
         self.assertEqual(res.json()["restaurants"], ["A"])
+        self.assertEqual(res.json()["selected_restaurants"], ["A"])
         self.assertIn("csrf_token", res.json())
+        self.assertEqual(res.json()["language"], "es")
+
+    def test_language_endpoint_updates_session_language(self):
+        user = User(id=1, email="owner@example.com", password_hash="hash", role="user", dsn_id=10)
+        client = _client()
+        with patch("app.web_api.get_user_by_email", return_value=user), \
+             patch("app.web_api.verify_password", return_value=True), \
+             patch("app.web_api.get_user_by_id", return_value=user), \
+             patch("app.web_api.get_dsn_by_id", return_value={"id": 10, "name": "Client"}), \
+             patch("app.web_api.list_accessible_restaurants", return_value=[{"name": "A"}]):
+            login = client.post("/api/login", json={"email": "owner@example.com", "password": "pw", "language": "en"})
+            res = client.post("/api/language", json={"language": "es"}, headers={"X-CSRF-Token": _csrf(login)})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["language"], "es")
 
     def test_inactive_user_cannot_login(self):
         user = User(id=1, email="owner@example.com", password_hash="hash", role="user", dsn_id=10, is_active=False)
@@ -97,6 +112,19 @@ class WebApiTests(unittest.TestCase):
             res = client.post("/api/restaurants/select", json={"restaurant_names": ["B"]}, headers={"X-CSRF-Token": _csrf(login)})
         self.assertEqual(res.status_code, 403)
 
+    def test_single_restaurant_cannot_be_left_unselected(self):
+        user = User(id=1, email="owner@example.com", password_hash="hash", role="user", dsn_id=10)
+        client = _client()
+        with patch("app.web_api.get_user_by_email", return_value=user), \
+             patch("app.web_api.verify_password", return_value=True), \
+             patch("app.web_api.get_user_by_id", return_value=user), \
+             patch("app.web_api.get_dsn_by_id", return_value={"id": 10, "name": "Client"}), \
+             patch("app.web_api.list_accessible_restaurants", return_value=[{"name": "A"}]):
+            login = client.post("/api/login", json={"email": "owner@example.com", "password": "pw"})
+            res = client.post("/api/restaurants/select", json={"restaurant_names": []}, headers={"X-CSRF-Token": _csrf(login)})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["selected_restaurants"], ["A"])
+
     def test_chat_returns_structured_payload_without_html(self):
         user = User(id=1, email="owner@example.com", password_hash="hash", role="user", dsn_id=10)
         vera_response = VeraResponse(
@@ -133,6 +161,38 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("debug", data)
         append_memory.assert_called_once()
         self.assertEqual(append_web.call_count, 2)
+
+    def test_chat_spanish_question_overrides_english_ui_language(self):
+        user = User(id=1, email="owner@example.com", password_hash="hash", role="user", dsn_id=10)
+        vera_response = VeraResponse(
+            action="answer",
+            message="Las ventas subieron.",
+            rows=[{"gross_sales": 1000}],
+            table="",
+            chart_bytes=None,
+            chart_caption=None,
+            sql="SELECT 1",
+            executed_queries=[QueryResult("sales", "SELECT 1", [{"gross_sales": 1000}], "")],
+        )
+        client = _client()
+        with patch("app.web_api.get_user_by_email", return_value=user), \
+             patch("app.web_api.verify_password", return_value=True), \
+             patch("app.web_api.get_user_by_id", return_value=user), \
+             patch("app.web_api.get_dsn_by_id", return_value={"id": 10, "name": "Client", "dsn": "postgres://x"}), \
+             patch("app.web_api.list_accessible_restaurants", return_value=[{"name": "A"}]), \
+             patch("app.web_api.get_user_conversation_memory", return_value=[]), \
+             patch("app.web_api.get_restaurant_knowledge", return_value={}), \
+             patch("app.web_api.answer_with_vera", return_value=vera_response) as answer_with_vera, \
+             patch("app.web_api.append_user_conversation_memory"), \
+             patch("app.web_api.append_web_chat_message"):
+            login = client.post("/api/login", json={"email": "owner@example.com", "password": "pw", "language": "en"})
+            res = client.post(
+                "/api/chat",
+                json={"message": "¿Cuánto vendimos ayer?", "restaurant_names": ["A"], "language": "en"},
+                headers={"X-CSRF-Token": _csrf(login)},
+            )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(answer_with_vera.call_args.kwargs["language"], "es")
 
     def test_chat_resolves_pending_clarification_with_original_question(self):
         user = User(id=1, email="owner@example.com", password_hash="hash", role="user", dsn_id=10)

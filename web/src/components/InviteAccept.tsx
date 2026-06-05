@@ -1,11 +1,21 @@
 import React from "react";
 import { KeyRound } from "lucide-react";
 import { api } from "../api";
+import type { Language } from "../i18n";
+import { languageNames, t } from "../i18n";
 import type { AdminInvite } from "../types";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
-export function InviteAccept({ token }: { token: string }) {
+export function InviteAccept({
+  token,
+  language,
+  onLanguageChange
+}: {
+  token: string;
+  language: Language;
+  onLanguageChange: (language: Language) => void;
+}) {
   const [invite, setInvite] = React.useState<AdminInvite | null>(null);
   const [password, setPassword] = React.useState("");
   const [error, setError] = React.useState("");
@@ -16,7 +26,7 @@ export function InviteAccept({ token }: { token: string }) {
   React.useEffect(() => {
     api<{ invite: AdminInvite }>(`/api/invites/${token}`)
       .then((data) => setInvite(data.invite))
-      .catch((err) => setError(err instanceof Error ? err.message : "Invite not found"))
+      .catch((err) => setError(err instanceof Error ? err.message : t(language, "inviteNotFound")))
       .finally(() => setLoading(false));
   }, [token]);
 
@@ -44,26 +54,37 @@ export function InviteAccept({ token }: { token: string }) {
           <KeyRound className="h-6 w-6" />
         </div>
         <div>
-          <p className="mb-1 text-xs font-semibold uppercase text-emerald-700">Vera invite</p>
-          <h1 className="text-2xl font-semibold tracking-normal">Create your password</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Your email, role, DSN, and restaurant access are fixed by the invite.</p>
+          <p className="mb-1 text-xs font-semibold uppercase text-emerald-700">{t(language, "inviteEyebrow")}</p>
+          <h1 className="text-2xl font-semibold tracking-normal">{t(language, "inviteTitle")}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{t(language, "inviteSubtitle")}</p>
         </div>
+        <label className="grid gap-2 text-sm font-medium">
+          {t(language, "language")}
+          <select
+            className="h-10 rounded-md border border-input bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
+            value={language}
+            onChange={(event) => onLanguageChange(event.target.value as Language)}
+          >
+            <option value="en">{languageNames.en}</option>
+            <option value="es">{languageNames.es}</option>
+          </select>
+        </label>
         {loading ? (
-          <p className="text-sm text-muted-foreground">Loading invite...</p>
+          <p className="text-sm text-muted-foreground">{t(language, "loadingInvite")}</p>
         ) : invite ? (
           <div className="grid gap-2 rounded-md border border-border p-3 text-sm">
             <div className="flex items-center justify-between gap-2">
               <span className="font-medium">{invite.email}</span>
               <Badge variant="outline">{invite.role}</Badge>
             </div>
-            <p className="text-muted-foreground">{invite.dsn_name || "No DSN assigned"}</p>
-            <p className="text-muted-foreground">{invite.restaurant_names.length ? `${invite.restaurant_names.length} restaurant restrictions` : "All restaurants in this DSN"}</p>
+            <p className="text-muted-foreground">{invite.dsn_name || t(language, "noDsnAssigned")}</p>
+            <p className="text-muted-foreground">{invite.restaurant_names.length ? `${invite.restaurant_names.length} ${t(language, "restaurantRestrictions").toLowerCase()}` : t(language, "allRestaurantsInDsn")}</p>
             <Badge variant={invite.status === "pending" ? "success" : "outline"}>{invite.status}</Badge>
           </div>
         ) : null}
         {invite?.status === "pending" && !accepted && (
           <label className="grid gap-2 text-sm font-medium">
-            Password
+            {t(language, "password")}
             <input
               className="h-10 rounded-md border border-input bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
               value={password}
@@ -75,12 +96,12 @@ export function InviteAccept({ token }: { token: string }) {
         )}
         {accepted && (
           <div className="grid gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-            <p className="font-medium">Password created.</p>
-            <Button type="button" onClick={() => { window.location.href = "/"; }}>Go to login</Button>
+            <p className="font-medium">{t(language, "passwordCreated")}</p>
+            <Button type="button" onClick={() => { window.location.href = "/"; }}>{t(language, "goToLogin")}</Button>
           </div>
         )}
         {error && <p className="rounded-md border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
-        {invite?.status === "pending" && !accepted && <Button type="submit" disabled={saving}>{saving ? "Creating password" : "Accept invite"}</Button>}
+        {invite?.status === "pending" && !accepted && <Button type="submit" disabled={saving}>{saving ? t(language, "creatingPassword") : t(language, "acceptInvite")}</Button>}
       </form>
     </main>
   );

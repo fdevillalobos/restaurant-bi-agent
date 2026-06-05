@@ -123,7 +123,143 @@ button {
 }
 
 @media (max-width: 768px) {
-  aside {
-    max-height: 42vh;
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .workspace-shell {
+    height: 100dvh;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .desktop-sidebar.workspace-sidebar {
+    display: none;
+  }
+
+  .mobile-menu-sheet {
+    width: min(22rem, calc(100vw - 2rem));
+  }
+
+  .mobile-sidebar {
+    height: 100%;
+    border-right: 0;
+  }
+
+  .workspace-sidebar {
+    min-height: 0;
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid hsl(var(--border));
+    display: grid;
+    grid-template-rows: auto auto auto;
+  }
+
+  .sidebar-brand {
+    display: grid;
+    grid-template-columns: 2.75rem minmax(0, 1fr);
+    align-items: center;
+    column-gap: 0.75rem;
+    padding: 0.85rem 1rem;
+  }
+
+  .brand-icon {
+    margin: 0;
+    height: 2.5rem;
+    width: 2.5rem;
+  }
+
+  .sidebar-brand h1 {
+    font-size: 1.1rem;
+    line-height: 1.25;
+  }
+
+  .sidebar-scroll {
+    min-height: 0;
+    max-height: 8.5rem;
+  }
+
+  .restaurant-section {
+    gap: 0.6rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .restaurant-list {
+    display: flex;
+    gap: 0.5rem;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+    scroll-snap-type: x proximity;
+  }
+
+  .restaurant-list button {
+    min-width: max-content;
+    max-width: 16rem;
+    scroll-snap-align: start;
+  }
+
+  .recent-section {
+    display: none;
+  }
+
+  .sidebar-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .sidebar-controls > * {
+    min-width: 0;
+  }
+
+  .sidebar-controls label:first-child {
+    padding: 0.45rem 0.6rem;
+  }
+
+  .sidebar-controls label:first-child span {
+    display: none;
+  }
+
+  .sidebar-controls label:nth-child(2) {
+    min-height: 2.5rem;
+    padding: 0.45rem 0.6rem;
+  }
+
+  .sidebar-controls > button {
+    min-height: 2.5rem;
+    padding-left: 0.65rem;
+    padding-right: 0.65rem;
+  }
+
+  .sidebar-controls .control-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .sidebar-controls > button svg {
+    flex-shrink: 0;
+  }
+
+  .chat-pane {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .chat-header {
+    padding: 0.75rem 1rem;
+  }
+
+  .mobile-menu-button {
+    flex-shrink: 0;
+    background: hsl(var(--background));
+  }
+
+  .markdown {
+    overflow-wrap: anywhere;
   }
 }

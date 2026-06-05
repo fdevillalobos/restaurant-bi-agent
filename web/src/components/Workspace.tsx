@@ -11,8 +11,10 @@ import {
   type AppendMessage
 } from "@assistant-ui/react";
 import type { ThreadAssistantMessagePart, ThreadUserMessagePart } from "@assistant-ui/react";
-import { ArrowDown, ArrowUp, Bug, Check, Copy, Database, LogOut, PanelRightOpen, RefreshCw, Settings as SettingsIcon, Square } from "lucide-react";
+import { ArrowDown, ArrowUp, Bug, Check, Copy, Database, LogOut, Menu, PanelRightOpen, RefreshCw, Settings as SettingsIcon, Square } from "lucide-react";
 import { api, toChatMessages } from "../api";
+import type { Language } from "../i18n";
+import { languageNames, t } from "../i18n";
 import { cn } from "../lib/utils";
 import type { ChatMessage, ChatResponse, MeResponse, StoredChatMessage, VeraDebug } from "../types";
 import { Badge } from "./ui/badge";
@@ -61,7 +63,8 @@ function DebugInspector({
   latestDebug,
   selected,
   messages,
-  includeDebug
+  includeDebug,
+  language
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -69,16 +72,17 @@ function DebugInspector({
   selected: string[];
   messages: ChatMessage[];
   includeDebug: boolean;
+  language: Language;
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent>
-        <SheetTitle className="mb-1 text-xl font-semibold">Inspector</SheetTitle>
-        <p className="mb-4 text-sm text-muted-foreground">Debug output is only requested from Vera when Debug is enabled.</p>
+        <SheetTitle className="mb-1 text-xl font-semibold">{t(language, "inspector")}</SheetTitle>
+        <p className="mb-4 text-sm text-muted-foreground">{t(language, "debugDescription")}</p>
         <Tabs defaultValue="query">
           <TabsList>
-            <TabsTrigger value="query">Query</TabsTrigger>
-            <TabsTrigger value="context">Context</TabsTrigger>
+            <TabsTrigger value="query">{t(language, "query")}</TabsTrigger>
+            <TabsTrigger value="context">{t(language, "context")}</TabsTrigger>
           </TabsList>
           <TabsContent value="query" className="min-h-0 flex-1">
             {latestDebug ? (
@@ -86,7 +90,7 @@ function DebugInspector({
                 {latestDebug.error && <p className="rounded-md border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{latestDebug.error}</p>}
                 {latestDebug.failed_query && (
                   <div className="rounded-md border border-border p-3">
-                    <p className="mb-2 text-sm font-semibold">Failed query</p>
+                    <p className="mb-2 text-sm font-semibold">{t(language, "failedQuery")}</p>
                     <pre className="debug-pre">{JSON.stringify(latestDebug.failed_query, null, 2)}</pre>
                   </div>
                 )}
@@ -94,8 +98,8 @@ function DebugInspector({
                   latestDebug.queries.map((query, index) => (
                     <div className="rounded-md border border-border p-3" key={`${query.sql}-${index}`}>
                       <div className="mb-2 flex items-center justify-between gap-2">
-                        <p className="text-sm font-semibold">{query.purpose || `Query ${index + 1}`}</p>
-                        <Badge variant="outline">{query.row_count} rows</Badge>
+                        <p className="text-sm font-semibold">{query.purpose || `${t(language, "queryN")} ${index + 1}`}</p>
+                        <Badge variant="outline">{query.row_count} {t(language, "rows")}</Badge>
                       </div>
                       <pre className="debug-pre">{query.sql}</pre>
                     </div>
@@ -106,21 +110,21 @@ function DebugInspector({
               </div>
             ) : (
               <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
-                {includeDebug ? "Ask a question to capture SQL/query metadata." : "Turn on Debug, then ask a question to capture SQL/query metadata."}
+                {includeDebug ? t(language, "queryMetadataPrompt") : t(language, "debugOffPrompt")}
               </div>
             )}
           </TabsContent>
           <TabsContent value="context">
             <div className="grid gap-3 text-sm">
               <div className="rounded-md border border-border p-3">
-                <p className="mb-2 font-semibold">Selected restaurants</p>
+                <p className="mb-2 font-semibold">{t(language, "selectedRestaurants")}</p>
                 <div className="flex flex-wrap gap-2">
                   {selected.map((restaurant) => <Badge key={restaurant} variant="outline">{restaurant}</Badge>)}
                 </div>
               </div>
               <div className="rounded-md border border-border p-3">
-                <p className="mb-2 font-semibold">Visible thread</p>
-                <p className="text-muted-foreground">{messages.filter((message) => message.role === "assistant").length} assistant responses loaded from the web transcript.</p>
+                <p className="mb-2 font-semibold">{t(language, "visibleThread")}</p>
+                <p className="text-muted-foreground">{messages.filter((message) => message.role === "assistant").length} {t(language, "assistantResponsesLoaded")}</p>
               </div>
             </div>
           </TabsContent>
@@ -130,25 +134,25 @@ function DebugInspector({
   );
 }
 
-function Composer() {
+function Composer({ language }: { language: Language }) {
   return (
     <ComposerPrimitive.Root className="relative flex w-full flex-col rounded-md border border-border bg-background p-2 shadow-workspace focus-within:ring-2 focus-within:ring-ring">
       <ComposerPrimitive.Input
         submitMode="enter"
         rows={1}
-        placeholder="Ask Vera a business question..."
+        placeholder={t(language, "askPlaceholder")}
         className="max-h-36 min-h-12 resize-none bg-transparent px-2 py-2 text-sm outline-none"
       />
       <div className="flex items-center justify-between border-t border-border pt-2">
-        <p className="px-2 text-xs text-muted-foreground">Enter sends. Shift+Enter adds a new line.</p>
+        <p className="px-2 text-xs text-muted-foreground">{t(language, "composerHint")}</p>
         <AuiIf condition={(s) => !s.thread.isRunning}>
           <ComposerPrimitive.Send asChild>
-            <Button size="icon" aria-label="Send message"><ArrowUp className="h-4 w-4" /></Button>
+            <Button size="icon" aria-label={t(language, "sendMessage")}><ArrowUp className="h-4 w-4" /></Button>
           </ComposerPrimitive.Send>
         </AuiIf>
         <AuiIf condition={(s) => s.thread.isRunning}>
           <ComposerPrimitive.Cancel asChild>
-            <Button size="icon" aria-label="Stop Vera"><Square className="h-3 w-3 fill-current" /></Button>
+            <Button size="icon" aria-label={t(language, "stopVera")}><Square className="h-3 w-3 fill-current" /></Button>
           </ComposerPrimitive.Cancel>
         </AuiIf>
       </div>
@@ -156,23 +160,23 @@ function Composer() {
   );
 }
 
-function MessageActions() {
+function MessageActions({ language }: { language: Language }) {
   return (
     <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" className="mt-2 flex gap-1 text-muted-foreground">
       <ActionBarPrimitive.Copy asChild>
         <Button variant="ghost" size="sm">
           <Copy className="h-3.5 w-3.5" />
-          Copy
+          {t(language, "copy")}
         </Button>
       </ActionBarPrimitive.Copy>
       <ActionBarPrimitive.Reload asChild>
-        <Button variant="ghost" size="sm"><RefreshCw className="h-3.5 w-3.5" /> Retry</Button>
+        <Button variant="ghost" size="sm"><RefreshCw className="h-3.5 w-3.5" /> {t(language, "retry")}</Button>
       </ActionBarPrimitive.Reload>
     </ActionBarPrimitive.Root>
   );
 }
 
-function ThreadMessage({ messagesById, onAsk }: { messagesById: Map<string, ChatMessage>; onAsk: (text: string) => void }) {
+function ThreadMessage({ messagesById, onAsk, language }: { messagesById: Map<string, ChatMessage>; onAsk: (text: string) => void; language: Language }) {
   const message = useMessage();
   const source = messagesById.get(message.id);
   const content = source?.content || stateMessageText(message.content);
@@ -192,7 +196,7 @@ function ThreadMessage({ messagesById, onAsk }: { messagesById: Map<string, Chat
     return (
       <MessagePrimitive.Root className="mx-auto grid w-full max-w-4xl justify-items-end px-4">
         <div className="max-w-[80%] rounded-md bg-primary px-4 py-3 text-sm leading-6 text-primary-foreground shadow-sm">{content}</div>
-        <MessageActions />
+        <MessageActions language={language} />
       </MessagePrimitive.Root>
     );
   }
@@ -200,11 +204,11 @@ function ThreadMessage({ messagesById, onAsk }: { messagesById: Map<string, Chat
   return (
     <MessagePrimitive.Root className="mx-auto w-full max-w-4xl px-4">
       {source?.response ? (
-        <VeraResponseBlocks response={source.response} onAsk={onAsk} />
+        <VeraResponseBlocks response={source.response} onAsk={onAsk} language={language} />
       ) : (
         <div className="rounded-md border border-border bg-card p-4 text-sm leading-7">{content}</div>
       )}
-      <MessageActions />
+      <MessageActions language={language} />
     </MessagePrimitive.Root>
   );
 }
@@ -213,12 +217,14 @@ function AssistantThread({
   messages,
   isRunning,
   isSendDisabled,
-  onAsk
+  onAsk,
+  language
 }: {
   messages: ChatMessage[];
   isRunning: boolean;
   isSendDisabled: boolean;
   onAsk: (text: string) => Promise<void> | void;
+  language: Language;
 }) {
   const runtime = useExternalStoreRuntime<ChatMessage>({
     messages,
@@ -245,12 +251,12 @@ function AssistantThread({
             {messages.length === 0 && (
               <div className="mx-auto grid w-full max-w-4xl gap-4 px-4 pt-10">
                 <div>
-                  <p className="mb-2 text-xs font-semibold uppercase text-emerald-700">Vera BI Analyst</p>
-                  <h2 className="text-3xl font-semibold tracking-normal">Ask about sales, products, channels, covers, or trends.</h2>
-                  <p className="mt-3 max-w-2xl text-muted-foreground">Start with an exact metric or a broad diagnostic question. Vera will ask for clarification only when the business intent materially changes the analysis.</p>
+                  <p className="mb-2 text-xs font-semibold uppercase text-emerald-700">{t(language, "emptyEyebrow")}</p>
+                  <h2 className="text-3xl font-semibold tracking-normal">{t(language, "emptyTitle")}</h2>
+                  <p className="mt-3 max-w-2xl text-muted-foreground">{t(language, "emptySubtitle")}</p>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
-                  {["What changed in sales last month?", "Which products drove revenue last week?", "Compare delivery vs eat-in this month.", "What should I investigate next?"].map((prompt) => (
+                  {[t(language, "promptSalesChange"), t(language, "promptProducts"), t(language, "promptDelivery"), t(language, "promptNext")].map((prompt) => (
                     <Button key={prompt} variant="outline" className="h-auto justify-start whitespace-normal p-4 text-left" onClick={() => void onAsk(prompt)}>
                       {prompt}
                     </Button>
@@ -258,16 +264,16 @@ function AssistantThread({
                 </div>
               </div>
             )}
-            <ThreadPrimitive.Messages>{() => <ThreadMessage messagesById={messagesById} onAsk={onAsk} />}</ThreadPrimitive.Messages>
+            <ThreadPrimitive.Messages>{() => <ThreadMessage messagesById={messagesById} onAsk={onAsk} language={language} />}</ThreadPrimitive.Messages>
           </div>
           <ThreadPrimitive.ViewportFooter className="sticky bottom-0 bg-gradient-to-t from-background via-background pb-4 pt-8">
             <div className="mx-auto w-full max-w-4xl px-4">
               <ThreadPrimitive.ScrollToBottom asChild>
-                <Button variant="outline" size="icon" className="absolute -top-6 left-1/2 h-8 w-8 -translate-x-1/2 rounded-full" aria-label="Scroll to bottom">
+                <Button variant="outline" size="icon" className="absolute -top-6 left-1/2 h-8 w-8 -translate-x-1/2 rounded-full" aria-label={t(language, "scrollToBottom")}>
                   <ArrowDown className="h-4 w-4" />
                 </Button>
               </ThreadPrimitive.ScrollToBottom>
-              <Composer />
+              <Composer language={language} />
             </div>
           </ThreadPrimitive.ViewportFooter>
         </ThreadPrimitive.Viewport>
@@ -282,40 +288,48 @@ function Sidebar({
   messages,
   includeDebug,
   onDebugChange,
+  language,
+  onLanguageChange,
   onSelect,
   onLogout,
   onOpenInspector,
-  onOpenSettings
+  onOpenSettings,
+  className
 }: {
   me: MeResponse;
   selected: string[];
   messages: ChatMessage[];
   includeDebug: boolean;
   onDebugChange: (value: boolean) => void;
+  language: Language;
+  onLanguageChange: (language: Language) => void;
   onSelect: (next: string[]) => void;
   onLogout: () => void;
   onOpenInspector: () => void;
   onOpenSettings: () => void;
+  className?: string;
 }) {
   const recentQuestions = [...messages].filter((message) => message.role === "user").slice(-5).reverse();
 
   return (
-    <aside className="flex min-h-0 flex-col border-r border-border bg-card">
-      <div className="border-b border-border p-5">
-        <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground">
+    <aside className={cn("workspace-sidebar flex min-h-0 flex-col border-r border-border bg-card", className)}>
+      <div className="sidebar-brand border-b border-border p-5">
+        <div className="brand-icon mb-4 flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <Database className="h-5 w-5" />
         </div>
-        <p className="text-xs font-semibold uppercase text-emerald-700">Vera BI Analyst</p>
-        <h1 className="mt-1 text-xl font-semibold tracking-normal">{me.dsn?.name || "Restaurant group"}</h1>
-        <p className="mt-1 truncate text-sm text-muted-foreground">{me.user.email}</p>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase text-emerald-700">Vera BI Analyst</p>
+          <h1 className="mt-1 truncate text-xl font-semibold tracking-normal">{me.dsn?.name || t(language, "restaurantGroup")}</h1>
+          <p className="mt-1 truncate text-sm text-muted-foreground">{me.user.email}</p>
+        </div>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
-        <section className="grid gap-3 p-5">
+      <ScrollArea className="sidebar-scroll min-h-0 flex-1">
+        <section className="restaurant-section grid gap-3 p-5">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Restaurants</h2>
-            <Badge variant="outline">{selected.length || 0} selected</Badge>
+            <h2 className="text-sm font-semibold">{t(language, "restaurants")}</h2>
+            <Badge variant="outline">{selected.length || 0} {t(language, "selected")}</Badge>
           </div>
-          <div className="grid gap-2">
+          <div className="restaurant-list grid gap-2">
             {me.restaurants.map((restaurant) => {
               const active = selected.includes(restaurant);
               return (
@@ -334,27 +348,46 @@ function Sidebar({
             })}
           </div>
         </section>
-        <section className="grid gap-3 border-t border-border p-5">
-          <h2 className="text-sm font-semibold">Recent questions</h2>
+        <section className="recent-section grid gap-3 border-t border-border p-5">
+          <h2 className="text-sm font-semibold">{t(language, "recentQuestions")}</h2>
           {recentQuestions.length > 0 ? recentQuestions.map((message) => (
             <p className="line-clamp-2 rounded-md bg-muted p-2 text-xs text-muted-foreground" key={message.id}>{message.content}</p>
-          )) : <p className="text-sm text-muted-foreground">No questions yet.</p>}
+          )) : <p className="text-sm text-muted-foreground">{t(language, "noQuestionsYet")}</p>}
         </section>
       </ScrollArea>
-      <div className="grid gap-2 border-t border-border p-5">
+      <div className="sidebar-controls grid gap-2 border-t border-border p-5">
+        <label className="grid gap-2 rounded-md border border-border px-3 py-2 text-sm">
+          <span className="font-medium">{t(language, "language")}</span>
+          <select
+            className="h-9 rounded-md border border-input bg-background px-2 outline-none focus:ring-2 focus:ring-ring"
+            value={language}
+            onChange={(event) => onLanguageChange(event.target.value as Language)}
+          >
+            <option value="en">{languageNames.en}</option>
+            <option value="es">{languageNames.es}</option>
+          </select>
+        </label>
         <label className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
-          <span className="flex items-center gap-2"><Bug className="h-4 w-4" /> Debug</span>
+          <span className="flex items-center gap-2"><Bug className="h-4 w-4" /> {t(language, "debug")}</span>
           <Switch checked={includeDebug} onCheckedChange={onDebugChange} />
         </label>
-        <Button variant="outline" onClick={onOpenInspector}><PanelRightOpen className="h-4 w-4" /> Inspector</Button>
-        {me.capabilities.settings && <Button variant="outline" onClick={onOpenSettings}><SettingsIcon className="h-4 w-4" /> Settings</Button>}
-        <Button variant="ghost" onClick={onLogout}><LogOut className="h-4 w-4" /> Logout</Button>
+        <Button className="sidebar-inspector" variant="outline" onClick={onOpenInspector}><PanelRightOpen className="h-4 w-4" /> <span className="control-label">{t(language, "inspector")}</span></Button>
+        {me.capabilities.settings && <Button className="sidebar-settings" variant="outline" onClick={onOpenSettings}><SettingsIcon className="h-4 w-4" /> <span className="control-label">{t(language, "settings")}</span></Button>}
+        <Button className="sidebar-logout" variant="ghost" onClick={onLogout}><LogOut className="h-4 w-4" /> <span className="control-label">{t(language, "logout")}</span></Button>
       </div>
     </aside>
   );
 }
 
-export function Workspace({ initialMe }: { initialMe: MeResponse }) {
+export function Workspace({
+  initialMe,
+  language,
+  onLanguageChange
+}: {
+  initialMe: MeResponse;
+  language: Language;
+  onLanguageChange: (language: Language) => void;
+}) {
   const [me, setMe] = React.useState(initialMe);
   const [selected, setSelected] = React.useState<string[]>(initialMe.selected_restaurants);
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
@@ -363,6 +396,7 @@ export function Workspace({ initialMe }: { initialMe: MeResponse }) {
   const [loadingHistory, setLoadingHistory] = React.useState(true);
   const [running, setRunning] = React.useState(false);
   const [view, setView] = React.useState<"chat" | "settings">("chat");
+  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
 
   React.useEffect(() => {
     api<{ messages: StoredChatMessage[] }>("/api/chat/history")
@@ -385,17 +419,26 @@ export function Workspace({ initialMe }: { initialMe: MeResponse }) {
     window.location.reload();
   }
 
+  async function changeLanguage(next: Language) {
+    onLanguageChange(next);
+    const data = await api<MeResponse>("/api/language", {
+      method: "POST",
+      body: JSON.stringify({ language: next })
+    });
+    setMe(data);
+  }
+
   async function ask(text: string) {
     const question = text.trim();
     if (!question || selected.length === 0 || running) return;
     const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: question };
-    const statusMessage: ChatMessage = { id: crypto.randomUUID(), role: "status", content: "Vera is planning the analysis, querying the data, and preparing visuals." };
+    const statusMessage: ChatMessage = { id: crypto.randomUUID(), role: "status", content: t(language, "veraPlanning") };
     setRunning(true);
     setMessages((current) => [...current, userMessage, statusMessage]);
     try {
       const response = await api<ChatResponse>("/api/chat", {
         method: "POST",
-        body: JSON.stringify({ message: question, restaurant_names: selected, include_debug: includeDebug })
+        body: JSON.stringify({ message: question, restaurant_names: selected, include_debug: includeDebug, language })
       });
       setMessages((current) => current.filter((message) => message.id !== statusMessage.id).concat({
         id: crypto.randomUUID(),
@@ -406,12 +449,12 @@ export function Workspace({ initialMe }: { initialMe: MeResponse }) {
     } catch (err) {
       const fallback: ChatResponse = {
         action: "answer",
-        message: err instanceof Error ? err.message : "Vera could not answer this question.",
+        message: err instanceof Error ? err.message : t(language, "veraCouldNotAnswer"),
         tables: [],
         charts: [],
         recommendations: [],
         suggested_next_questions: [],
-        debug: includeDebug ? { error: err instanceof Error ? err.message : "Unknown error" } : undefined
+        debug: includeDebug ? { error: err instanceof Error ? err.message : t(language, "unknownError") } : undefined
       };
       setMessages((current) => current.filter((message) => message.id !== statusMessage.id).concat({
         id: crypto.randomUUID(),
@@ -429,38 +472,71 @@ export function Workspace({ initialMe }: { initialMe: MeResponse }) {
   if (view === "settings") {
     return (
       <TooltipProvider>
-        <Settings me={me} onBack={() => setView("chat")} />
+        <Settings me={me} language={language} onBack={() => setView("chat")} />
       </TooltipProvider>
     );
   }
 
   return (
-    <TooltipProvider>
-      <main className="grid h-screen min-h-0 grid-cols-[320px_minmax(0,1fr)] bg-background text-foreground max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]">
+      <TooltipProvider>
+      <main className="workspace-shell grid h-screen min-h-0 grid-cols-[320px_minmax(0,1fr)] bg-background text-foreground max-md:grid-cols-1">
         <Sidebar
+          className="desktop-sidebar"
           me={me}
           selected={selected}
           messages={messages}
           includeDebug={includeDebug}
           onDebugChange={setIncludeDebug}
+          language={language}
+          onLanguageChange={(next) => void changeLanguage(next)}
           onSelect={(next) => void saveSelection(next)}
           onLogout={() => void logout()}
           onOpenInspector={() => setDebugOpen(true)}
           onOpenSettings={() => setView("settings")}
         />
-        <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-          <header className="flex items-center justify-between gap-3 border-b border-border bg-card px-5 py-3">
-            <div>
-              <p className="text-sm font-semibold">Analyst workspace</p>
-              <p className="text-xs text-muted-foreground">{selected.length ? selected.join(", ") : "Select at least one restaurant"}</p>
+        <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+          <SheetContent className="mobile-menu-sheet left-0 right-auto max-w-[22rem] border-l-0 border-r p-0">
+            <SheetTitle className="sr-only">{t(language, "menu")}</SheetTitle>
+            <Sidebar
+              className="mobile-sidebar"
+              me={me}
+              selected={selected}
+              messages={messages}
+              includeDebug={includeDebug}
+              onDebugChange={setIncludeDebug}
+              language={language}
+              onLanguageChange={(next) => void changeLanguage(next)}
+              onSelect={(next) => void saveSelection(next)}
+              onLogout={() => void logout()}
+              onOpenInspector={() => {
+                setMobileMenuOpen(false);
+                setDebugOpen(true);
+              }}
+              onOpenSettings={() => {
+                setMobileMenuOpen(false);
+                setView("settings");
+              }}
+            />
+          </SheetContent>
+        </Sheet>
+        <section className="chat-pane grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+          <header className="chat-header flex items-center justify-between gap-3 border-b border-border bg-card px-5 py-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <Button className="mobile-menu-button md:hidden" variant="outline" size="icon" onClick={() => setMobileMenuOpen(true)} aria-label={t(language, "openMenu")}>
+                <Menu className="h-4 w-4" />
+              </Button>
+              <div className="min-w-0">
+              <p className="text-sm font-semibold">{t(language, "analystWorkspace")}</p>
+                <p className="truncate text-xs text-muted-foreground">{selected.length ? selected.join(", ") : t(language, "selectAtLeastOneRestaurant")}</p>
+              </div>
             </div>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="icon" onClick={() => setDebugOpen(true)} aria-label="Open inspector">
+                <Button className="desktop-inspector-button max-md:hidden" variant="outline" size="icon" onClick={() => setDebugOpen(true)} aria-label={t(language, "openInspector")}>
                   <PanelRightOpen className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Open inspector</TooltipContent>
+              <TooltipContent>{t(language, "openInspector")}</TooltipContent>
             </Tooltip>
           </header>
           {loadingHistory ? (
@@ -469,10 +545,10 @@ export function Workspace({ initialMe }: { initialMe: MeResponse }) {
               <Skeleton className="h-44" />
             </div>
           ) : (
-            <AssistantThread messages={messages} isRunning={running} isSendDisabled={selected.length === 0 || running} onAsk={ask} />
+            <AssistantThread messages={messages} isRunning={running} isSendDisabled={selected.length === 0 || running} onAsk={ask} language={language} />
           )}
         </section>
-        <DebugInspector open={debugOpen} onOpenChange={setDebugOpen} latestDebug={latestDebug} selected={selected} messages={messages} includeDebug={includeDebug} />
+        <DebugInspector open={debugOpen} onOpenChange={setDebugOpen} latestDebug={latestDebug} selected={selected} messages={messages} includeDebug={includeDebug} language={language} />
       </main>
     </TooltipProvider>
   );

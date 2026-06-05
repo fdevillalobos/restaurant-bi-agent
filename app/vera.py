@@ -286,12 +286,14 @@ def final_with_vera(
     return VeraFinal.model_validate(data)
 
 
-def format_vera_final(final: VeraFinal) -> str:
+def format_vera_final(final: VeraFinal, language: str = "en") -> str:
     parts = [_truncate_text(final.answer.strip())]
     if final.recommendations:
-        parts.append("Recommended next steps:\n" + "\n".join(f"- {r}" for r in final.recommendations[:3]))
+        heading = "Próximos pasos recomendados" if language == "es" else "Recommended next steps"
+        parts.append(f"{heading}:\n" + "\n".join(f"- {r}" for r in final.recommendations[:3]))
     if final.suggested_next_questions:
-        parts.append("Questions worth asking next:\n" + "\n".join(f"- {q}" for q in final.suggested_next_questions[:3]))
+        heading = "Preguntas útiles para seguir" if language == "es" else "Questions worth asking next"
+        parts.append(f"{heading}:\n" + "\n".join(f"- {q}" for q in final.suggested_next_questions[:3]))
     return "\n\n".join(p for p in parts if p.strip())
 
 
@@ -344,9 +346,11 @@ def answer_with_vera(
     )
     primary = executed[0] if executed else QueryResult("", "", [], "")
     chart_bytes = make_chart(primary.rows, question, plan.chart) if (plan.chart and primary.rows) else None
-    message = format_vera_final(final)
+    lang = language or detect_language(question)
+    message = format_vera_final(final, lang)
     if plan.knowledge_question:
-        message = f"{message}\n\nRestaurant context question:\n- {plan.knowledge_question}"
+        heading = "Pregunta sobre el contexto del restaurante" if lang == "es" else "Restaurant context question"
+        message = f"{message}\n\n{heading}:\n- {plan.knowledge_question}"
 
     return VeraResponse(
         action="answer",

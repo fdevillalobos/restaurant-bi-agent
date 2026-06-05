@@ -12,6 +12,7 @@ export type MeResponse = {
   restaurants: string[];
   selected_restaurants: string[];
   csrf_token?: string | null;
+  language: "en" | "es";
   capabilities: {
     settings: boolean;
     manage_dsns: boolean;
